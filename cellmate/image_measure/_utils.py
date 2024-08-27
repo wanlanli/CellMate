@@ -269,13 +269,32 @@
 #     return arc_value % (np.pi*2)
 
 
-# def angle_between_points_array(p1, p2):
-#     dot = np.sum(p1 * p2, axis=1)
-#     deter = p1[:, 0] * p2[:, 1] - p1[:, 1] * p2[:, 0]
-#     anlges = np.arctan2(deter, dot)
-#     anlges[anlges < 0] += 2 * np.pi
-#     return anlges
-
+def angle_between_points_array(p1, p2):
+    """
+    Calculates the angle between pairs of 2D vectors represented by the rows of p1 and p2.
+    The angles are in the range [0, 2π].
+    
+    Parameters:
+    p1 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
+    p2 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
+    
+    Returns:
+    np.ndarray: A 1D array of angles (in radians) between each corresponding pair of vectors in p1 and p2.
+    """
+    
+    # Calculate the dot product of corresponding vectors in p1 and p2
+    dot = np.sum(p1 * p2, axis=1)
+    
+    # Calculate the determinant (cross product in 2D) for each pair of vectors
+    deter = p1[:, 0] * p2[:, 1] - p1[:, 1] * p2[:, 0]
+    
+    # Calculate the angle using arctan2 to account for the sign and quadrant
+    angles = np.arctan2(deter, dot)
+    
+    # Normalize the angles to the range [0, 2π]
+    angles[angles < 0] += 2 * np.pi
+    
+    return angles
 
 # def angle_of_pints_180(p1, p2):
 #     # Calculate dot product

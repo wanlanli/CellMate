@@ -386,7 +386,6 @@ class RegionProperties:
     @property
     # find contours method
     def coords(self):
-        from .._utils import angle_between_points_array, resample_equal_distance
         from ._find_contours import find_contours
         image = np.pad(self.image, pad_width=1)
         coord = find_contours(image)
@@ -409,14 +408,24 @@ class RegionProperties:
 
     @property
     def skeleton(self):
-        from ._skeletonize import skeletonize
-        image = skeletonize(self.image, method="lee")
-        point = np.column_stack(np.where(image))
-        return point
+        # from ._skeletonize import skeletonize
+        from ._skeleton_cell import skeletonize_cell
+        image = np.pad(self.image, pad_width=1)
+        points = skeletonize_cell(image)
+        points = points - [1, 1]
+        # points = np.column_stack(np.where(image))
+        object_offset = np.array([self.slice[i].start for i in range(self._ndim)])
+        points = object_offset + points + self._offset
+        return points
 
     @property
     def medial_axis_length(self):
-        return len(self.skeleton)
+        diff = np.diff(self.skeleton, axis=0)
+        # Compute the Euclidean distance between consecutive points
+        segment_lengths = np.sqrt((diff ** 2).sum(axis=1))
+        # Sum all the segment lengths to get the total length of the line
+        total_length = segment_lengths.sum()
+        return total_length
 
     @property
     @only2d
@@ -1226,6 +1235,78 @@ def _install_properties_docs():
     for p in [member for member in dir(RegionProperties)
               if not member.startswith('_')]:
         getattr(RegionProperties, p).__doc__ = prop_doc[p]
+
+
+def resample_equal_distance(points, num_points):
+    """
+    Resample a given set of points along a contour to produce a specified number of points,
+    spaced equally in terms of distance along the contour.
+
+    Parameters:
+    points (np.ndarray): An array of shape (n, 2) representing n points along a 2D contour.
+    num_points (int): The desired number of resampled points.
+
+    Returns:
+    np.ndarray: An array of shape (num_points, 2) containing the resampled points.
+    """
+
+    # Compute the cumulative distance along the contour
+    # np.diff(points, axis=0) computes the difference between consecutive points
+    # np.sqrt(np.sum(..., axis=1)) gives the Euclidean distance between each pair of consecutive points
+    # np.cumsum(...) computes the cumulative distance along the contour
+    distance = np.cumsum(np.sqrt(np.sum(np.diff(points, axis=0) ** 2, axis=1)))
+
+    # Insert a zero at the beginning to represent the start of the contour
+    distance = np.insert(distance, 0, 0)
+
+    # Protect against division by zero by adding a small epsilon to the total distance
+    epsilon = 1e-10
+    normalized_distance = distance / (distance[-1] + epsilon)
+
+    # Create an array of uniformly spaced distance values in the range [0, 1]
+    alpha = np.linspace(0, 1, num_points)
+
+    # Find the indices in 'normalized_distance' that are closest to each value in 'alpha'
+    indices = np.searchsorted(normalized_distance, alpha, side='right') - 1
+
+    # Clip the next indices to ensure they stay within the bounds of the array
+    next_indices = np.clip(indices + 1, 0, len(points) - 1)
+
+    # Compute the weights for linear interpolation between points[indices] and points[next_indices]
+    weights = (alpha - normalized_distance[indices]) / (normalized_distance[next_indices] - normalized_distance[indices] + epsilon)
+
+    # Linearly interpolate between the points to obtain the resampled points
+    result = (1 - weights)[:, np.newaxis] * points[indices] + weights[:, np.newaxis] * points[next_indices]
+
+    return result
+
+
+def angle_between_points_array(p1, p2):
+    """
+    Calculates the angle between pairs of 2D vectors represented by the rows of p1 and p2.
+    The angles are in the range [0, 2π].
+
+    Parameters:
+    p1 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
+    p2 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
+
+    Returns:
+    np.ndarray: A 1D array of angles (in radians) between each corresponding pair of vectors in p1 and p2.
+    """
+
+    # Calculate the dot product of corresponding vectors in p1 and p2
+    dot = np.sum(p1 * p2, axis=1)
+
+    # Calculate the determinant (cross product in 2D) for each pair of vectors
+    deter = p1[:, 0] * p2[:, 1] - p1[:, 1] * p2[:, 0]
+
+    # Calculate the angle using arctan2 to account for the sign and quadrant
+    angles = np.arctan2(deter, dot)
+
+    # Normalize the angles to the range [0, 2π]
+    angles[angles < 0] += 2 * np.pi
+
+    return angles
 
 
 if __debug__:

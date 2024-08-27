@@ -196,6 +196,22 @@ class ImageMeasure(np.ndarray):
         return self.coordinate[index]
 
     @property
+    def skeleton(self):
+        return list(self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON)])
+
+    def skeletons(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.skeleton[index]
+
+    @property
+    def skeleton_length(self):
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MEDIAL_AXIS)]
+
+    def skeleton_lengths(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.skeleton_lengths[index]
+
+    @property
     def semantic(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SEMANTIC_LABEL)]
 

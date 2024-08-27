@@ -21,3 +21,6 @@ DIVISION = 1000
 # The instance label distinguishes between different instances of the same semantic type (e.g., multiple cells of the same type).
 # Example: If label = 1234567, then semantic_label = label // DIVISION = 1234567 // 1000 = 1234.
 #                              then instance_label = label % DIVISION = 1234567 % 1000 = 567.
+
+IMAGE_CONTOURS_LENGTH = 60
+TRACK_FEATURE_DIMENSION = 8

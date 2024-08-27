@@ -278,3 +278,7 @@ class Cell(object):
         data = self._features[index]
         data = data[:, key_index]
         return np.array(list(data))
+
+    @property
+    def tips(self):
+        pass
