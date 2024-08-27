@@ -212,6 +212,22 @@ class ImageMeasure(np.ndarray):
         return self.skeleton_lengths[index]
 
     @property
+    def medial_minor_length(self):
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MEDIAL_MINOR_AXIS_LENGTH)]
+
+    def medial_minor_lengths(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.medial_minor_length[index]
+
+    @property
+    def medial_minor_axis(self):
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MEDIAL_MINOR_AXIS)]
+
+    def medial_minor_axises(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.medial_minor_axis[index]
+
+    @property
     def semantic(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SEMANTIC_LABEL)]
 

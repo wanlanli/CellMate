@@ -34,6 +34,10 @@ PROPS = {
     'Skeletons': 'skeleton',
     'MedialAxisLength': 'medial_axis_length',
     'medial_axis_length': 'medial_axis_length',
+    'MedialMinorAxisLength': 'medial_minor_axis_length',
+    'medial_minor_axis_length': 'medial_minor_axis_length',
+    'MedialMinorAxis': 'medial_minor_axis',
+    'medial_minor_axis': 'medial_minor_axis',
     'Eccentricity': 'eccentricity',
     'EquivDiameter': 'equivalent_diameter_area',
     'equivalent_diameter': 'equivalent_diameter_area',
@@ -114,6 +118,8 @@ COL_DTYPES = {
     'intensity_min': float,
     'label': int,
     'medial_axis_length': float,
+    'medial_minor_axis': object,
+    'medial_minor_axis_length': float,
     'moments': float,
     'moments_central': float,
     'moments_hu': float,
@@ -426,6 +432,18 @@ class RegionProperties:
         # Sum all the segment lengths to get the total length of the line
         total_length = segment_lengths.sum()
         return total_length
+
+    @property
+    def medial_minor_axis(self):
+        from ._skeleton_cell import perpendicular_line
+        points = perpendicular_line(self.skeleton, self.coords)
+        return points
+
+    @property
+    def medial_minor_axis_length(self):
+        points = self.medial_minor_axis
+        length = np.sqrt((np.diff(points, axis=0)**2).sum(axis=1))
+        return length
 
     @property
     @only2d
@@ -1020,6 +1038,10 @@ def regionprops(label_image, intensity_image=None, cache=True,
         Coordinate list ``(row, col)`` of the region.
     **medial_axis_length** : float
         The length of the medial axis.
+    **medial_minor_axis_length** : float
+        The length of the medial minor axis.
+    **medial_minor_axis** : (2, 2) ndarray
+        Coordinate list ``(row, col)`` of the region.
     **eccentricity** : float
         Eccentricity of the ellipse that has the same second-moments as the
         region. The eccentricity is the ratio of the focal distance

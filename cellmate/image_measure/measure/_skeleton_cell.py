@@ -33,7 +33,7 @@ def skeletonize_cell(cropped_image, method: str = "medial_axis"):
     index = np.where((points == tips[0]).all(axis=1))[0][0]
     points = np.roll(points, -index, axis=0)
     ordered = nearest_neighbor_ordering(points)
-    ordered = smooth_curve(ordered, num_points=20)
+    ordered = smooth_curve(ordered, num_points=30)
 
     start_point = coords[np.argmin(np.linalg.norm(coords - ordered[0], axis=1))].astype(np.int_)
     end_poinst = coords[np.argmin(np.linalg.norm(coords - ordered[-1], axis=1))].astype(np.int_)
@@ -121,7 +121,7 @@ def smooth_curve(points, num_points=100):
     # Create a parameter for the curve
     t = np.linspace(0, 1, len(points))
     # Fit a spline to the points
-    tck, u = splprep([x, y], s=0)
+    tck, u = splprep([x, y], s=1000)
 
     # Generate new points along the spline
     u_new = np.linspace(0, 1, num_points)
@@ -130,3 +130,52 @@ def smooth_curve(points, num_points=100):
     # Return the new smooth set of points
     smooth_points = np.vstack((x_new, y_new)).T
     return smooth_points
+
+
+def perpendicular_line_through_midpoint(p1, p2):
+    x1 = p1[0]
+    y1 = p1[1]
+
+    x2 = p2[0]
+    y2 = p2[1]
+    # Calculate slope of the original line
+    if x2 - x1 != 0:
+        m = (y2 - y1) / (x2 - x1)
+    else:
+        # Handle the case where the line is vertical (slope is undefined)
+        m = np.inf
+
+    # Calculate the perpendicular slope
+    if m != 0 and m != np.inf:
+        m_perpendicular = -1 / m
+    else:
+        # Handle the case where the original line is horizontal (m = 0) or vertical (m = inf)
+        m_perpendicular = 0 if m == np.inf else np.inf
+
+    # Calculate the midpoint
+    xm = (x1 + x2) / 2
+    ym = (y1 + y2) / 2
+
+    # Define two points on the perpendicular line
+    if m_perpendicular != np.inf:
+        # Choose two x-values near the midpoint and calculate corresponding y-values
+        delta_x = 5
+        x3 = xm - delta_x
+        y3 = m_perpendicular * (x3 - xm) + ym
+
+        x4 = xm + delta_x
+        y4 = m_perpendicular * (x4 - xm) + ym
+    else:
+        # If the perpendicular line is vertical, we choose the same x-values and different y-values
+        x3, x4 = xm, xm
+        y3, y4 = ym - 5, ym + 5
+
+    return (x3, y3), (x4, y4)
+
+
+def perpendicular_line(skeleton, coords):
+    index = len(skeleton) // 2
+    a, b = perpendicular_line_through_midpoint(skeleton[index-1], skeleton[index])
+    start_a = find_intersection(a, b, coords)
+    start_b = find_intersection(b, a, coords)
+    return np.array([start_a, start_b])

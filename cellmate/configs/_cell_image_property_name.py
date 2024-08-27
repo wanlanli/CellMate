@@ -30,6 +30,8 @@ class _CellImageParamNameCommon:
     COORDINATE = "coords"
     SKELETON = "skeleton"
     MEDIAL_AXIS = "medial_axis_length"
+    MEDIAL_MINOR_AXIS = "medial_minor_axis"
+    MEDIAL_MINOR_LENGTH = "medial_minor_axis_length"
 
 
 class _CellImageParamNameInput:
