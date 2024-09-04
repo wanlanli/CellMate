@@ -29,9 +29,12 @@ class _CellImageParamNameCommon:
     ECCENTRICITY = "eccentricity"
     COORDINATE = "coords"
     SKELETON = "skeleton"
-    MEDIAL_AXIS = "medial_axis_length"
-    MEDIAL_MINOR_AXIS = "medial_minor_axis"
-    MEDIAL_MINOR_LENGTH = "medial_minor_axis_length"
+    SKELETON_MINOR = "skeleton_minor_axis"
+    SKELETON_MINOR_GRID = "skeleton_minor_grid"
+    SKELETON_GRID_LENGTH = "skeleton_grid_length"
+    SKELETON_MAJOR_LENGTH = "skeleton_major_length"
+    SKELETON_MINOR_LENGTH = "skeleton_minor_length"
+    SKELETON_CENTER = "skeleton_center"
 
 
 class _CellImageParamNameInput:

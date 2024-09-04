@@ -6,10 +6,14 @@ from math import sqrt
 from warnings import warn
 
 import numpy as np
+import math
 from scipy import ndimage as ndi
 
 from . import _moments
 from ._regionprops_utils import euler_number, perimeter, perimeter_crofton, _normalize_spacing
+from ._skeleton_cell import (perpendicular_grid, skeletonize_cell, smooth_curve, 
+                             find_tips, find_tips_axis, find_contours_smooth)
+from ._distance import CoordTree
 
 __all__ = ['regionprops', 'euler_number', 'perimeter', 'perimeter_crofton']
 
@@ -18,7 +22,6 @@ __all__ = ['regionprops', 'euler_number', 'perimeter', 'perimeter_crofton']
 # names. The keys in this PROPS dict correspond to older names used in prior
 # releases. For backwards compatibility, these older names will continue to
 # work, but will not be documented.
-COORD_LENGTH = 60
 PROPS = {
     'Area': 'area',
     'BoundingBox': 'bbox',
@@ -32,12 +35,18 @@ PROPS = {
     'convex_image': 'image_convex',
     'Coordinates': 'coords',
     'Skeletons': 'skeleton',
-    'MedialAxisLength': 'medial_axis_length',
-    'medial_axis_length': 'medial_axis_length',
-    'MedialMinorAxisLength': 'medial_minor_axis_length',
-    'medial_minor_axis_length': 'medial_minor_axis_length',
-    'MedialMinorAxis': 'medial_minor_axis',
-    'medial_minor_axis': 'medial_minor_axis',
+    'SkeletonMinorAxis': 'skeleton_minor_axis',
+    'skeleton_minor_axis': 'skeleton_minor_axis',
+    'skeleton_minor_grid': 'skeleton_minor_grid',
+    'SkeletonMinorGrid': 'skeleton_minor_grid',
+    'skeleton_grid_length': 'skeleton_grid_length',
+    'SkeletonGridLength': 'skeleton_grid_length',
+    'SkeletonMajorLength': 'skeleton_major_length',
+    'skeleton_major_length': 'skeleton_major_length',
+    'SkeletonMinorLength': 'skeleton_minor_length',
+    'skeleton_minor_length': 'skeleton_minor_length',
+    'skeleton_center': 'skeleton_center',
+    'SkeletonCenter': 'skeleton_center',
     'Eccentricity': 'eccentricity',
     'EquivDiameter': 'equivalent_diameter_area',
     'equivalent_diameter': 'equivalent_diameter_area',
@@ -49,6 +58,8 @@ PROPS = {
     'filled_image': 'image_filled',
     'HuMoments': 'moments_hu',
     'Image': 'image',
+    'ImagePad': 'image_pad',
+    'image_pad': 'image_pad',
     'InertiaTensor': 'inertia_tensor',
     'InertiaTensorEigvals': 'inertia_tensor_eigvals',
     'IntensityImage': 'image_intensity',
@@ -102,12 +113,15 @@ COL_DTYPES = {
     'centroid_weighted_local': float,
     'coords': object,
     'coords_scaled': object,
+    'coords_raw_pad': object,
+    'coords_tree': object,
     'eccentricity': float,
     'equivalent_diameter_area': float,
     'euler_number': int,
     'extent': float,
     'feret_diameter_max': float,
     'image': object,
+    'image_pad': object,
     'image_convex': object,
     'image_filled': object,
     'image_intensity': object,
@@ -117,9 +131,14 @@ COL_DTYPES = {
     'intensity_mean': float,
     'intensity_min': float,
     'label': int,
-    'medial_axis_length': float,
-    'medial_minor_axis': object,
-    'medial_minor_axis_length': float,
+    'skeleton_major_length': float,
+    'skeleton_minor_axis': object,
+    'skeleton_minor_grid': object,
+    'skeleton_grid_length': object,
+    'skeleton_minor_length': float,
+    'skeleton_major_axis': object,
+    'skeleton_major_length': float,
+    'skeleton_center': object,
     'moments': float,
     'moments_central': float,
     'moments_hu': float,
@@ -251,7 +270,7 @@ class RegionProperties:
 
     def __init__(self, slice, label, label_image, intensity_image,
                  cache_active, *, extra_properties=None, spacing=None,
-                 offset=None):
+                 offset=None, pad=1, skeleton_length=22):
 
         if intensity_image is not None:
             ndim = label_image.ndim
@@ -270,7 +289,8 @@ class RegionProperties:
             offset = np.zeros((label_image.ndim,), dtype=int)
         self._offset = np.array(offset)
 
-        self._slice = slice
+        self._pad = pad
+        self._skeleton_length = skeleton_length
         self.slice = slice
         self._label_image = label_image
         self._intensity_image = intensity_image
@@ -390,42 +410,52 @@ class RegionProperties:
         return (object_offset + indices) * self._spacing + self._offset
 
     @property
-    # find contours method
+    @_cached
+    def coords_raw_pad(self):
+        return find_contours_smooth(self.image_pad)
+
+    @property
+    @_cached
+    def skeleton(self):
+        path = skeletonize_cell(self.image_pad)
+        if (path is None) or (len(path) < 3):
+            path = self._axis_tips()[:3]
+            path = path + [self._pad, self._pad]
+            path = find_tips_axis(path, self.coords_raw_pad)
+        else:
+            path = find_tips(path, self.coords_raw_pad)
+
+        path = smooth_curve(path, num_points=self._skeleton_length)
+        path = path - [self._pad, self._pad]
+        object_offset = np.array([self.slice[i].start for i in range(self._ndim)])
+        path = object_offset + path + self._offset
+        return path
+
+    @property
+    @_cached
     def coords(self):
-        from ._find_contours import find_contours
-        image = np.pad(self.image, pad_width=1)
-        coord = find_contours(image)
-        if len(coord) > 0:
-            coord = coord[0] - [1, 1]
-            center = self.centroid_local
-            coord_local = coord - center
-            orientation = self.orientation
-            org_angles = angle_between_points_array(coord_local,
-                                                    np.array([[1, 0]]))
-            angles = (org_angles-orientation) % (np.pi*2)
-            start_point = np.argmin(angles)
-            coord = np.roll(coord, shift=-start_point, axis=0)
-            coord = resample_equal_distance(coord, COORD_LENGTH)
+        if self.coords_raw_pad is not None:
+            coord = self.coords_raw_pad - [self._pad, self._pad]
             object_offset = np.array([
                 self.slice[i].start for i in range(self._ndim)])[None, :]
             coord = object_offset + coord + self._offset[None, :]
+            if (len(self.skeleton) > 0):
+                tip_point = self.skeleton[0]
+                _, near_index = CoordTree(coord).topn([tip_point], top_n=1)
+                coord = np.roll(coord, shift=-near_index[0], axis=0)
             return coord
-        return None
+        else:
+            return None
 
     @property
-    def skeleton(self):
-        # from ._skeletonize import skeletonize
-        from ._skeleton_cell import skeletonize_cell
-        image = np.pad(self.image, pad_width=1)
-        points = skeletonize_cell(image)
-        points = points - [1, 1]
-        # points = np.column_stack(np.where(image))
-        object_offset = np.array([self.slice[i].start for i in range(self._ndim)])
-        points = object_offset + points + self._offset
-        return points
+    @_cached
+    def coords_tree(self):
+        return CoordTree(self.coords)
 
     @property
-    def medial_axis_length(self):
+    def skeleton_major_length(self):
+        if len(self.skeleton) == 0:
+            return 0
         diff = np.diff(self.skeleton, axis=0)
         # Compute the Euclidean distance between consecutive points
         segment_lengths = np.sqrt((diff ** 2).sum(axis=1))
@@ -434,16 +464,38 @@ class RegionProperties:
         return total_length
 
     @property
-    def medial_minor_axis(self):
-        from ._skeleton_cell import perpendicular_line
-        points = perpendicular_line(self.skeleton, self.coords)
-        return points
+    def skeleton_minor_axis(self):
+        if self.skeleton_minor_grid is None:
+            return None
+        index = self.skeleton_minor_grid.shape[0] // 2
+        return self.skeleton_minor_grid[index]
 
     @property
-    def medial_minor_axis_length(self):
-        points = self.medial_minor_axis
-        length = np.sqrt((np.diff(points, axis=0)**2).sum(axis=1))
-        return length
+    def skeleton_center(self):
+        return self.skeleton_minor_axis.sum(axis=0)/2
+
+    @property
+    @_cached
+    def skeleton_minor_grid(self):
+        if len(self.skeleton) == 0:
+            return None
+        if len(self.coords) == 0:
+            return None
+        return perpendicular_grid(self.skeleton, self.coords)
+
+    @property
+    def skeleton_grid_length(self):
+        if len(self.skeleton_minor_grid) > 0:
+            return np.sqrt(np.sum(np.square(self.skeleton_minor_grid[:, 0] - self.skeleton_minor_grid[:, 1]), axis=1))
+        else:
+            return None
+
+    @property
+    def skeleton_minor_length(self):
+        if len(self.skeleton_minor_axis) == 0:
+            return 0
+        else:
+            return np.sqrt((np.diff(self.skeleton_minor_axis, axis=0)**2).sum(axis=1))
 
     @property
     @only2d
@@ -482,6 +534,11 @@ class RegionProperties:
     @_cached
     def image(self):
         return self._label_image[self.slice] == self.label
+
+    @property
+    @_cached
+    def image_pad(self):
+        return np.pad(self.image, pad_width=self._pad)
 
     @property
     @_cached
@@ -724,6 +781,21 @@ class RegionProperties:
                 return False
 
         return True
+
+    def _axis_tips(self):
+        y0, x0 = self.centroid_local
+        orientation = self.orientation
+        x1 = x0 + math.cos(orientation) * 0.5 * self.axis_minor_length
+        y1 = y0 - math.sin(orientation) * 0.5 * self.axis_minor_length
+        x2 = x0 - math.sin(orientation) * 0.5 * self.axis_major_length
+        y2 = y0 - math.cos(orientation) * 0.5 * self.axis_major_length
+
+        x3 = 2*x0 - x1
+        y3 = 2*y0 - y1
+        x4 = 2*x0 - x2
+        y4 = 2*y0 - y2
+        return np.array([[y2, x2], [y0, x0], [y4, x4],
+                         [y1, x1], [y0, x0], [y3, x3]])
 
 
 def _props_to_numpy(regions, properties=('label', 'bbox'), separator='_'):
@@ -1034,14 +1106,24 @@ def regionprops(label_image, intensity_image=None, cache=True,
         Coordinate list ``(row, col)``of the region scaled by ``spacing``.
     **coords** : (N, 2) ndarray
         Coordinate list ``(row, col)`` of the region.
+    **coords_raw_pad** : (N, 2) ndarray
+        Coordinate list ``(row, col)``of the region.
+    **coords_tree** : object
+        nearest tree of coordinate.
     **skeleton** : (N, 2) ndarray
         Coordinate list ``(row, col)`` of the region.
-    **medial_axis_length** : float
-        The length of the medial axis.
-    **medial_minor_axis_length** : float
-        The length of the medial minor axis.
-    **medial_minor_axis** : (2, 2) ndarray
+    **skeleton_minor_axis** : (2, 2) ndarray
         Coordinate list ``(row, col)`` of the region.
+    **skeleton_minor_grid** : list
+        minor grid.
+    **skeleton_center** : array
+        skeleton center.
+    **skeleton_major_length** : float
+        The length of the medial axis.
+    **skeleton_minor_length** : float
+        The length of the medial minor axis.
+    **skeleton_grid_length** : object
+        skeleton grid length.
     **eccentricity** : float
         Eccentricity of the ellipse that has the same second-moments as the
         region. The eccentricity is the ratio of the focal distance
@@ -1063,6 +1145,8 @@ def regionprops(label_image, intensity_image=None, cache=True,
         points around a region's convex hull contour as determined by
         ``find_contours``. [5]_
     **image** : (H, J) ndarray
+        Sliced binary region image which has the same size as bounding box.
+    ***image_pad** : (H, J) ndarray
         Sliced binary region image which has the same size as bounding box.
     **image_convex** : (H, J) ndarray
         Binary convex hull image which has the same size as bounding box.

@@ -1,7 +1,9 @@
 import functools
 import numpy as np
 
-__all__ = ['check_nD']
+from scipy.interpolate import splprep, splev
+
+__all__ = ['check_nD', 'smooth_curve']
 
 
 def check_nD(array, ndim, arg_name='image'):
@@ -174,3 +176,38 @@ class deprecate_func(_DecoratorBaseClass):
             wrapped.__doc__ = doc + '\n\n    ' + wrapped.__doc__
 
         return wrapped
+
+
+def smooth_curve(points: np.array, num_points: int = 100, s=100):
+    """
+    Generates a smooth curve through a set of input points using spline interpolation.
+
+    Parameters:
+    -----------
+    points : array-like
+        A 2D array or list of shape (n, 2), where each row represents a point with (x, y) coordinates.
+    
+    num_points : int, optional
+        The number of points to generate along the smooth curve. Default is 100.
+
+    Returns:
+    --------
+    numpy.ndarray
+        A 2D array of shape (num_points, 2) containing the (x, y) coordinates of the smoothed curve.
+    """
+    # Extract x and y coordinates
+    points = np.array(points)
+    if points.shape[0] <= 1:
+        return points
+    elif points.shape[0] <= 3:
+        tck, u = splprep([points[:, 0], points[:, 1]], k=1, s=10)
+    else:
+        tck, u = splprep([points[:, 0], points[:, 1]], k=2, s=s)
+
+    # Generate new points along the spline
+    u_new = np.linspace(0, 1, num_points)
+    x_new, y_new = splev(u_new, tck)
+
+    # Return the new smooth set of points
+    smooth_points = np.vstack((x_new, y_new)).T
+    return smooth_points

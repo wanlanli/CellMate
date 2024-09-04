@@ -1,6 +1,7 @@
 import numpy as np
 
 from ._find_contours_cy import _get_contour_segments
+from .utils import smooth_curve
 
 from collections import deque
 

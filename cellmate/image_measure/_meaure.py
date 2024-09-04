@@ -130,10 +130,18 @@ class ImageMeasure(np.ndarray):
 
     @property
     def center(self):
-        colum = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.CENTER_LIST]
-        return self._properties[:, colum]
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_CENTER)]
 
     def centers(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.center[index]
+
+    @property
+    def geometry_center(self):
+        colum = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.CENTER]
+        return self._properties[:, colum]
+
+    def geometry_centers(self, index=None, label=None):
         index = self.__index(index, label)
         return self.center[index]
 
@@ -196,6 +204,14 @@ class ImageMeasure(np.ndarray):
         return self.coordinate[index]
 
     @property
+    def skeleton_minor_grid(self):
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MINOR_GRID)]
+
+    def skeleton_minor_grids(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.skeleton_minor_grid[index]
+
+    @property
     def skeleton(self):
         return list(self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON)])
 
@@ -205,7 +221,7 @@ class ImageMeasure(np.ndarray):
 
     @property
     def skeleton_length(self):
-        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MEDIAL_AXIS)]
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON)]
 
     def skeleton_lengths(self, index=None, label=None):
         index = self.__index(index, label)
@@ -213,19 +229,27 @@ class ImageMeasure(np.ndarray):
 
     @property
     def medial_minor_length(self):
-        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MEDIAL_MINOR_AXIS_LENGTH)]
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MAJOR_LENGTH)]
 
     def medial_minor_lengths(self, index=None, label=None):
         index = self.__index(index, label)
         return self.medial_minor_length[index]
 
     @property
-    def medial_minor_axis(self):
-        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MEDIAL_MINOR_AXIS)]
+    def skeleton_minor_axis(self):
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MINOR)]
 
-    def medial_minor_axises(self, index=None, label=None):
+    def skeleton_minor_axises(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.medial_minor_axis[index]
+        return self.skeleton_minor_axis[index]
+
+    @property
+    def skeleton_grid_length(self):
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_GRID_LENGTH)]
+
+    def skeleton_grid_lengths(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.skeleton_grid_length[index]
 
     @property
     def semantic(self):

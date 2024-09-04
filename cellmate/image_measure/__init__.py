@@ -6,7 +6,7 @@ from .measure import find_nearest_points
 __all__ = [
     "ImageMeasure",
     "angle_of_vectors",
-    "angle_between_points_array",
+    # "angle_between_points_array",
     "regionprops_table",
     "find_nearest_points"
 ]
