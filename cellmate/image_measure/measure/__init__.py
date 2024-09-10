@@ -3,6 +3,7 @@ __all__ = [
     'regionprops_table',
     'moments',
     'find_nearest_points',
+    'CoordTree',
     'find_contours',
     'skeletonize',
 ]
@@ -10,6 +11,6 @@ __all__ = [
 
 from ._regionprops import (regionprops, regionprops_table)
 from ._moments import moments
-from ._distance import find_nearest_points
+from ._distance import find_nearest_points, CoordTree
 from ._find_contours import find_contours
 from ._skeletonize import skeletonize

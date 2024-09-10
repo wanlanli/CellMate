@@ -20,7 +20,7 @@ from ._cell_generation_property_name import (GENERATION_TREE,
                                              GENERATION_COLUMNS,
                                              CellGenParamMap,)
 
-from ._setting import DIVISION
+from .config import DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH
 
 
 __all__ = [
@@ -33,4 +33,6 @@ __all__ = [
     "GENERATION_COLUMNS",
 
     "DIVISION",
+    "CONTOURS_LENGTH",
+    "SKELETON_LENGTH",
 ]

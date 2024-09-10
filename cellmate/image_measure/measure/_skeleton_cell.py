@@ -3,7 +3,6 @@ import numpy as np
 from scipy import ndimage
 from scipy.interpolate import splprep, splev
 from skimage.graph import route_through_array
-from sklearn.neighbors import NearestNeighbors
 
 from ._find_contours import find_contours
 
@@ -186,13 +185,16 @@ def find_tips(path, boarder):
         The extended path including the intersection points, or the original path if no intersections are found.
     """
     start_point = find_intersection(path[1], path[0], boarder)
+    if start_point is not None:
+        path = list([start_point]) + list(path)
+
     end_point = find_intersection(path[-2], path[-1], boarder)
-    if (start_point is not None) & (end_point is not None):
-        path = np.array(list([start_point]) + list(path) + list([end_point]))
-        return path
-    else:
+    if end_point is not None:
+        path = list(path) + list([end_point])
+
+    if (start_point is None) & (end_point is None):
         print("No tips found!")
-        return path
+    return np.array(path)
 
 
 def smooth_curve(points, num_points=100, s=100):

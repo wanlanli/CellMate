@@ -5,9 +5,9 @@ from functools import cached_property
 import numpy as np
 import pandas as pd
 
-from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION)
+from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH)
 from .measure._regionprops import regionprops_table
-from .measure import find_nearest_points
+from .measure import CoordTree
 from cellmate.utils import create_line, angle_of_vectors, included_angle
 
 
@@ -39,6 +39,7 @@ class ImageMeasure(np.ndarray):
         self.__hash_obj = hash_func(self._properties[:, 0])
         self.__cost = self._init_cost_matrix()
         self.pixel_resolution = 1
+        self.trees = self.init_trees()
 
     def __index(self,
                 index: Union[int, Sequence] = None,
@@ -95,7 +96,9 @@ class ImageMeasure(np.ndarray):
         label: int, the identify, equal with image values
         """
         props, columns = regionprops_table(self.__array__(),
-                                           properties=IMAGE_MEASURE_PARAM)
+                                           properties=IMAGE_MEASURE_PARAM,
+                                           skeleton_length=SKELETON_LENGTH,
+                                           coord_length=CONTOURS_LENGTH)
         props = props.T
         data = np.empty((props.shape[0], 3), dtype=np.int_)
         # semantic
@@ -110,8 +113,14 @@ class ImageMeasure(np.ndarray):
                     CELL_IMAGE_PARAM.IS_BORDER]
         self._columns = columns
         self._properties = np.concatenate((props, data), axis=1)
-
     # get properties
+
+    def init_trees(self):
+        trees = []
+        for i in range(0, self._properties.shape[0]):
+            trees.append(CoordTree(self.coordinate(index=i)))
+        return trees
+
     @cached_property
     def property_table(self):
         return pd.DataFrame(self._properties, columns=self._columns)
@@ -121,167 +130,184 @@ class ImageMeasure(np.ndarray):
         return self._properties[index]
 
     @property
-    def label(self):
+    def labels(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.LABEL)]
 
-    def labels(self, index=None, label=None):
+    def label(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.label[index]
+        return self.labels[index]
 
     @property
-    def center(self):
+    def centers(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_CENTER)]
 
-    def centers(self, index=None, label=None):
+    def center(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.center[index]
+        return self.centers[index]
 
     @property
-    def geometry_center(self):
+    def geometry_centers(self):
         colum = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.CENTER]
         return self._properties[:, colum]
 
-    def geometry_centers(self, index=None, label=None):
+    def geometry_center(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.center[index]
+        return self.centers[index]
 
     @property
-    def orientation(self):
+    def orientations(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.ORIENTATION)]
 
-    def orientations(self, index=None, label=None):
+    def orientation(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.orientation[index]
+        return self.orientations[index]
 
     @property
-    def axis_major_length(self):
+    def axis_major_lengths(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MAJOR_AXIS)]
 
-    def axis_major_lengths(self, index=None, label=None):
+    def axis_major_length(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.axis_major_length[index]
+        return self.axis_major_lengths[index]
 
     @property
-    def axis_minor_length(self):
+    def axis_minor_lengths(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MINOR_AXIS)]
 
-    def axis_minor_lengths(self, index=None, label=None):
+    def axis_minor_length(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.axis_minor_length[index]
+        return self.axis_minor_lengths[index]
 
     @property
-    def area(self):
+    def areas(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.AREA)]
 
-    def areas(self, index=None, label=None):
+    def area(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.area[index]
+        return self.areas[index]
 
     @property
-    def bbox(self):
+    def bboxes(self):
         colum = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.BOUNDING_BOX_LIST]
         return self._properties[:, colum]
 
-    def bboxs(self, index=None, label=None):
+    def bbox(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.bbox[index]
+        return self.bboxes[index]
 
     @property
-    def eccentricity(self):
+    def eccentricities(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.ECCENTRICITY)]
 
-    def eccentricities(self, index=None, label=None):
+    def eccentricity(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.eccentricity[index]
+        return self.eccentricities[index]
 
     @property
-    def coordinate(self):
+    def coordinates(self):
         return np.array(list(self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.COORDINATE)]),
                         dtype=np.float_)
 
-    def coordinates(self, index=None, label=None):
+    def coordinate(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.coordinate[index]
+        return self.coordinates[index]
 
     @property
-    def skeleton_minor_grid(self):
+    def skeleton_minor_grids(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MINOR_GRID)]
 
-    def skeleton_minor_grids(self, index=None, label=None):
+    def skeleton_minor_grid(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.skeleton_minor_grid[index]
+        return self.skeleton_minor_grids[index]
 
     @property
-    def skeleton(self):
+    def skeletons(self):
         return list(self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON)])
 
-    def skeletons(self, index=None, label=None):
+    def skeleton(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.skeleton[index]
+        return self.skeletons[index]
 
     @property
-    def skeleton_length(self):
+    def skeleton_lengths(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON)]
 
-    def skeleton_lengths(self, index=None, label=None):
+    def skeleton_length(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.skeleton_lengths[index]
+        return self.skeleton_length[index]
 
     @property
-    def medial_minor_length(self):
+    def medial_minor_lengths(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MAJOR_LENGTH)]
 
-    def medial_minor_lengths(self, index=None, label=None):
+    def medial_minor_length(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.medial_minor_length[index]
+        return self.medial_minor_lengths[index]
 
     @property
-    def skeleton_minor_axis(self):
+    def skeleton_minor_axises(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MINOR)]
 
-    def skeleton_minor_axises(self, index=None, label=None):
+    def skeleton_minor_axis(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.skeleton_minor_axis[index]
+        return self.skeleton_minor_axises[index]
 
     @property
-    def skeleton_grid_length(self):
+    def skeleton_grid_lengths(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_GRID_LENGTH)]
 
-    def skeleton_grid_lengths(self, index=None, label=None):
+    def skeleton_grid_length(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.skeleton_grid_length[index]
+        return self.skeleton_grid_lengths[index]
 
     @property
-    def semantic(self):
+    def semantics(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SEMANTIC_LABEL)]
 
-    @semantic.setter
-    def semantic(self, v):
+    @semantics.setter
+    def semantics(self, v):
         self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SEMANTIC_LABEL)] = v
 
-    def semantics(self, index=None, label=None):
+    def semantic(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.semantic[index]
+        return self.semantics[index]
 
     @property
-    def instance(self):
+    def instances(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.INSTANCE_LABEL)]
 
-    def instances(self, index=None, label=None):
+    def instance(self, index=None, label=None):
         index = self.__index(index, label)
         return self.instances[index]
 
     @property
-    def is_border(self):
+    def are_borders(self):
         return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.IS_BORDER)]
 
-    def borders(self, index=None, label=None):
+    def is_border(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.is_border[index]
+        return self.are_borders[index]
 
-    # def features(self):
+    @property
+    def tips(self):
+        tips = []
+        for s in self.skeletons:
+            if s is None:
+                tips.append([None])
+            else:
+                tips.append([s[0], s[-1]])
+        return tips
 
-    # calculate distance
+    def tip(self, index=None, label=None):
+        index = self.__index(index, label)
+        return self.tips[index]
+
+    def tip_index(self, index=None, label=None):
+        tips = self.tip(index, label)
+        coord = self.coordinate(index, label)
+        _, index = CoordTree(coord, top_n=1).topn(tips)
+        return index
+
     def _init_cost_matrix(self):
         """Initialize the distance matrix as -1
         Return
@@ -336,12 +362,15 @@ class ImageMeasure(np.ndarray):
         Notes
         ----------
         """
-        nearnest_dis, idx_tgt, idx_src = find_nearest_points(
-            self.coordinates(target),
-            self.coordinates(source))
+        # nearnest_dis, idx_tgt, idx_src = find_nearest_points(
+        #     self.coordinate(target),
+        #     self.coordinate(source))
+        nearnest_dis, idx_src = self.trees[source].topn(self.coordinate(target))
+        idx_tgt = np.argmin(nearnest_dis)
+        idx_src = idx_src[idx_tgt][0]
         center_dist = np.sqrt(np.sum(
-            np.square(self.centers(target)-self.centers(source))))
-        return [center_dist, nearnest_dis, idx_tgt, idx_src]
+            np.square(self.center(target)-self.center(source))))
+        return [center_dist, nearnest_dis[idx_tgt][0], idx_tgt, idx_src]
 
     def distance(self,
                  source: Union[int, Sequence[int]],
@@ -384,11 +413,11 @@ class ImageMeasure(np.ndarray):
         """
         source_index = self.__index_trans(source, ptype)
         target_index = self.__index_trans(target, ptype)
-        target_angle, source_angle = self.__two_regions_angle(source_index,
+        source_angle, target_angle = self.__two_regions_angle(source_index,
                                                               target_index)
-        return target_angle, source_angle
+        return source_angle, target_angle
 
-    def between_angle_index(self, source: int, target: int, ptype="index"):
+    def between_angle_index(self, source: int, target: int, ptype="index", norm=True):
         """Return include angles between source & target instance based
         on nearest points and major axis.
 
@@ -404,28 +433,32 @@ class ImageMeasure(np.ndarray):
         """
         source_index = self.__index_trans(source, ptype)
         target_index = self.__index_trans(target, ptype)
-        indexs = self.distance_idx([source_index], [target_index])[0, 0, 2:]
+        indexes = self.distance_idx([source_index], [target_index])[0, 0, 2:]
         # target_angle, source_angle = self.__two_regions_angle(source_index,
         #                                                       target_index)
-        return indexs[0], indexs[1]
+        source_tips = self.tip_index(index=source_index)
+        target_tips = self.tip_index(index=target_index)
+        source_angle_index = tips_distance_index(indexes[0], source_tips, length=CONTOURS_LENGTH, norm=norm)
+        target_angle_index = tips_distance_index(indexes[1], target_tips, length=CONTOURS_LENGTH, norm=norm)
+        return source_angle_index, target_angle_index
 
-    def __two_regions_angle(self, target: int, source: int):
+    def __two_regions_angle(self, region_0: int, region_1: int):
         """Use index to calculate the angles between two objects.
         Parameters
         ----------
         target: index
         source: index
         """
-        target_point, source_point = self.__nearest_point(target, source)
-        target_angle = _two_coordinate_point_angle(
-            target_point,
-            self.coordinates(target)[0],
-            self.centers(target))
-        source_angle = _two_coordinate_point_angle(
-            source_point,
-            self.coordinates(source)[0],
-            self.centers(source))
-        return target_angle, source_angle
+        region_0_point, region_1_point = self.__nearest_point(region_0, region_1)
+        region_0_angle = point2tips_angle(
+            region_0_point,
+            self.tip(region_0),
+            self.center(region_0))
+        region_1_angle = point2tips_angle(
+            region_1_point,
+            self.tip(region_1),
+            self.center(region_1))
+        return region_0_angle, region_1_angle
 
     def nearest_point(self, source: int, target: int, ptype="index"):
         """Return the nearnest point of two objects.
@@ -452,8 +485,8 @@ class ImageMeasure(np.ndarray):
         source: index
         """
         indexs = self.distance_idx([target], [source])[0, 0, 2:]
-        target_point = self.coordinates(index=target)[indexs[0]]
-        source_point = self.coordinates(index=source)[indexs[1]]
+        target_point = self.coordinate(index=target)[indexs[0]]
+        source_point = self.coordinate(index=source)[indexs[1]]
         return target_point, source_point
 
     # neighbor nodes
@@ -538,6 +571,26 @@ def _two_coordinate_point_angle(point,
                              target_point - center)
     angle = included_angle(angle)
     return angle
+
+
+def point2tips_angle(point, tips, center):
+    index = np.argmin(np.sqrt(np.square(point - tips).sum(axis=1)))
+    angle = _two_coordinate_point_angle(point, tips[index], center)
+    return angle
+
+
+def tips_distance_index(point_index, tips_index, length, norm=True):
+    if tips_index[0] != 0:
+        print("Warning: coordinate not start from tip")
+    if point_index > tips_index[1]:
+        index_diff = int(min(point_index - tips_index[1], length - point_index))
+        if norm:
+            index_diff = float(index_diff/(length-tips_index[1]))
+    else:
+        index_diff = int(min(point_index, tips_index[1]-point_index))
+        if norm:
+            index_diff = float(index_diff/tips_index[1])
+    return index_diff
 
 
 def hash_func(data):

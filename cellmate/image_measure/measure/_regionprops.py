@@ -14,7 +14,6 @@ from ._regionprops_utils import euler_number, perimeter, perimeter_crofton, _nor
 from ._skeleton_cell import (perpendicular_grid, skeletonize_cell, smooth_curve, 
                              find_tips, find_tips_axis, find_contours_smooth)
 from ._distance import CoordTree
-
 __all__ = ['regionprops', 'euler_number', 'perimeter', 'perimeter_crofton']
 
 
@@ -270,7 +269,7 @@ class RegionProperties:
 
     def __init__(self, slice, label, label_image, intensity_image,
                  cache_active, *, extra_properties=None, spacing=None,
-                 offset=None, pad=1, skeleton_length=22):
+                 offset=None, pad=1, skeleton_length=22, coord_length=60):
 
         if intensity_image is not None:
             ndim = label_image.ndim
@@ -291,6 +290,7 @@ class RegionProperties:
 
         self._pad = pad
         self._skeleton_length = skeleton_length
+        self._coord_length = coord_length
         self.slice = slice
         self._label_image = label_image
         self._intensity_image = intensity_image
@@ -412,7 +412,7 @@ class RegionProperties:
     @property
     @_cached
     def coords_raw_pad(self):
-        return find_contours_smooth(self.image_pad)
+        return find_contours_smooth(self.image_pad, smooth_point=self._coord_length)
 
     @property
     @_cached
@@ -857,7 +857,9 @@ def _props_to_numpy(regions, properties=('label', 'bbox'), separator='_'):
 
 def regionprops_table(label_image, intensity_image=None,
                       properties=('label', 'bbox'), *, cache=True,
-                      separator='_', extra_properties=None, spacing=None):
+                      separator='_', extra_properties=None, spacing=None,
+                      skeleton_length=22, coord_length=60,
+                      ):
     """Compute image properties and return them as a pandas-compatible table.
 
     The table is a dictionary mapping column names to value arrays. See Notes
@@ -993,7 +995,8 @@ def regionprops_table(label_image, intensity_image=None,
 
     """
     regions = regionprops(label_image, intensity_image=intensity_image,
-                          cache=cache, extra_properties=extra_properties, spacing=spacing)
+                          cache=cache, extra_properties=extra_properties, spacing=spacing,
+                          skeleton_length=skeleton_length, coord_length=coord_length)
     if extra_properties is not None:
         properties = (
             list(properties) + [prop.__name__ for prop in extra_properties]
@@ -1020,7 +1023,8 @@ def regionprops_table(label_image, intensity_image=None,
 
 
 def regionprops(label_image, intensity_image=None, cache=True,
-                *, extra_properties=None, spacing=None, offset=None):
+                *, extra_properties=None, spacing=None, offset=None,
+                skeleton_length=22, coord_length=60):
     r"""Measure properties of labeled image regions.
 
     Parameters
@@ -1318,7 +1322,8 @@ def regionprops(label_image, intensity_image=None, cache=True,
 
         props = RegionProperties(sl, label, label_image, intensity_image,
                                  cache, spacing=spacing, extra_properties=extra_properties,
-                                 offset=offset_arr)
+                                 offset=offset_arr,
+                                 skeleton_length=skeleton_length, coord_length=coord_length)
         regions.append(props)
 
     return regions
