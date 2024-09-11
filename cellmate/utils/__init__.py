@@ -17,7 +17,7 @@ from ._geometric import angle_of_vectors, create_line, included_angle
 
 __all__ = [
     "hash_func",
-
     "angle_of_vectors",
     "create_line",
+    "included_angle"
 ]

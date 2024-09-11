@@ -8,7 +8,7 @@ import pandas as pd
 from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH)
 from .measure._regionprops import regionprops_table
 from .measure import CoordTree
-from cellmate.utils import create_line, angle_of_vectors, included_angle
+from cellmate.utils import create_line, angle_of_vectors, included_angle, hash_func
 
 
 class ImageMeasure(np.ndarray):
@@ -555,6 +555,21 @@ def _isin_list(source: list, target: list):
 
 def _cal_is_border(bbox, shape):
     """
+    Determines if any part of the bounding box touches the border of an image.
+
+    Parameters:
+    -----------
+    bbox : numpy.ndarray
+        A 2D array of shape (n, 4), where each row represents a bounding box as [min_row, min_col, max_row, max_col].
+
+    shape : tuple of int
+        A tuple representing the shape of the image as (height, width).
+
+    Returns:
+    --------
+    numpy.ndarray
+        A boolean array of length `n` where each element is True if the corresponding bounding box
+        touches the image border, and False otherwise.
     """
     min_row = bbox[:, 0] == 0
     min_col = bbox[:, 1] == 0
@@ -567,6 +582,27 @@ def _cal_is_border(bbox, shape):
 def _two_coordinate_point_angle(point,
                                 target_point=np.array([1, 0]),
                                 center=np.array([0, 0])):
+    """
+    Calculates the angle formed by the vector from 'center' to 'point' and the vector
+    from 'center' to 'target_point'.
+
+    Parameters:
+    -----------
+    point : numpy.ndarray
+        A 1D array representing the (x, y) coordinates of the point.
+
+    target_point : numpy.ndarray, optional
+        A 1D array representing the (x, y) coordinates of the target point (default is [1, 0]).
+
+    center : numpy.ndarray, optional
+        A 1D array representing the (x, y) coordinates of the center point (default is [0, 0]).
+
+    Returns:
+    --------
+    float
+        The included angle (in degrees or radians, depending on your `included_angle` function) between
+        the vector from 'center' to 'point' and the vector from 'center' to 'target_point'.
+    """
     angle = angle_of_vectors(point - center,
                              target_point - center)
     angle = included_angle(angle)
@@ -574,12 +610,56 @@ def _two_coordinate_point_angle(point,
 
 
 def point2tips_angle(point, tips, center):
+    """
+    Calculates the angle between a given point, the closest tip from a set of tips, through a center.
+
+    Parameters:
+    -----------
+    point : numpy.ndarray
+        A 1D array representing the (x, y) coordinates of the point.
+
+    tips : numpy.ndarray
+        A 2D array of shape (n, 2), where each row represents the (x, y) coordinates of a tip.
+
+    center : numpy.ndarray
+        A 1D array representing the (x, y) coordinates of the center point.
+
+    Returns:
+    --------
+    float
+        The angle (in degrees or radians depending on your angle calculation function) between the point,
+        the closest tip, and the center.
+    """
     index = np.argmin(np.sqrt(np.square(point - tips).sum(axis=1)))
     angle = _two_coordinate_point_angle(point, tips[index], center)
     return angle
 
 
 def tips_distance_index(point_index, tips_index, length, norm=True):
+    """
+    Calculates the index distance from a given point to the nearest tip in a list of points.
+
+    Parameters:
+    -----------
+    point_index : int
+        The index of the point for which the distance to the nearest tip is being calculated.
+
+    tips_index : tuple of int
+        A tuple containing the indices of the two tips, where `tips_index[0]` should be 0 
+        (the start) and `tips_index[1]` is the index of the second tip.
+
+    length : int
+        The total length of the path (i.e., the number of points in the path).
+
+    norm : bool, optional
+        Whether to normalize the distance by the total path length. Default is True.
+
+    Returns:
+    --------
+    float or int
+        The distance from `point_index` to the nearest tip. If `norm` is True, the distance 
+        is normalized to a range between 0 and 1.
+    """
     if tips_index[0] != 0:
         print("Warning: coordinate not start from tip")
     if point_index > tips_index[1]:
@@ -591,7 +671,3 @@ def tips_distance_index(point_index, tips_index, length, norm=True):
         if norm:
             index_diff = float(index_diff/tips_index[1])
     return index_diff
-
-
-def hash_func(data):
-    return {k: i for i, k in enumerate(data, 0)}
