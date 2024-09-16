@@ -210,7 +210,7 @@ def two_to_one_match(distance_binary):
             matched.append([row[0], row[1], i])
     if len(matched) > 0:
         matched = np.array(matched)
-        print("fusion:", matched)
+        # print("fusion:", matched)
     else:
         matched = np.empty(shape=(0, 3))
     unmatched_trackers = [i for i in range(0, distance_binary.shape[0]) if i not in matched[:, 0:2]]
@@ -252,7 +252,7 @@ def one_to_two_match(distance_binary):
 
     if len(matched) > 0:
         matched = np.array(matched)
-        print("divison:", matched)
+        # print("divison:", matched)
     else:
         matched = np.empty(shape=(0, 3))
     unmatched_trackers = [i for i in range(0, distance_binary.shape[0]) if i not in matched[:, 0]]

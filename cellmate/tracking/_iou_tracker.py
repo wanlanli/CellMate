@@ -24,10 +24,13 @@ class Tracker(BaseTracker):
         iou_matrix = np.zeros((number_of_tracks, number_of_instances, 3))
         for i, track in enumerate(last_track):
             for j, instance in enumerate(instances):
-                instance_mask = self.image[instance[1]] == instance[0]
-                track_mask = self.image[track[1]] == track[0]
-                iou = compute_mask_iou(track_mask, instance_mask)
-                iou_matrix[i, j] = iou
+                if bbox_overlapped(track[-1], instance[-1]):
+                    instance_mask = self.image[instance[1]] == instance[0]
+                    track_mask = self.image[track[1]] == track[0]
+                    iou = compute_mask_iou(track_mask, instance_mask)
+                    iou_matrix[i, j] = iou
+                else:
+                    continue
         return iou_matrix
 
     def __call__(self, *args: Any, **kwds: Any) -> Any:
@@ -57,8 +60,6 @@ class Tracker(BaseTracker):
                 distance_matrix[:, :, 0] = golden_distance
                 match_dict = one_to_one_match(golden_distance >= self.threshold)
                 unmatched_trackers = self.update_matched(match_dict, instances)
-                if frame == 98:
-                    print(match_dict)
                 matched_genteration_dict = match_cells_generation_iou(distance_matrix,
                                                                       self.threshold,
                                                                       unmatched_trackers,
@@ -68,7 +69,9 @@ class Tracker(BaseTracker):
 
                 self.update_divison(matched_genteration_dict[1], instances)
                 if ((len(matched_genteration_dict[2]) > 0) | (len(matched_genteration_dict[3]) > 0)):
-                    print("frame=", frame, matched_genteration_dict[2], matched_genteration_dict[3])
+                    print("frame=", frame,
+                          [trackers[t][0] for t in matched_genteration_dict[2]],
+                          [instances[t][0] for t in matched_genteration_dict[3]],)
 
             else:
                 pass
@@ -89,10 +92,12 @@ class Tracker(BaseTracker):
         labels = np.unique(self.image[0])[1:]
         for i in range(0, len(labels)):
             self.count += 1
+            bbox = get_bbox_from_mask(self.image[0] == labels[i])
             trk = IoUTrackedBox(idx=self.count,
-                                   label=labels[i],
-                                   frame=0,
-                                   feature=0)
+                                label=labels[i],
+                                frame=0,
+                                feature=0,
+                                bbox=bbox)
             self.trackers.append(trk)
 
     def traker_features_exist(self, frame):
@@ -203,7 +208,7 @@ class Tracker(BaseTracker):
         -----------
         """
         for fus in matched_fusion:
-            print("upate fusion")
+            #  print("upate fusion")
             self.count += 1
             label = instance[fus[2]]
             trk = IoUTrackedBox(
@@ -213,14 +218,15 @@ class Tracker(BaseTracker):
                 label=label[0],
                 frame=label[1],
                 feature=0,
+                bbox=label[-1]
                 )
-            
+
             self.trackers.append(trk)
             self.network.add_weighted_edges_from([[self.trackers[fus[0]].id, self.count, 2],
                                                   [self.trackers[fus[1]].id, self.count, 2]])
             self.trackers[fus[0]].end = True
             self.trackers[fus[1]].end = True
-
+            print("fusion: ", self.trackers[fus[0]].label[-1], self.trackers[fus[1]].label[-1], " -> ", label[0])
             # self.trackers[fus[0]].time_since_update = 0
             # self.trackers[fus[1]].time_since_update = 0
 
@@ -257,18 +263,41 @@ class Tracker(BaseTracker):
                     label=instances[div_i][0],
                     frame=instances[div_i][1],
                     feature=0,
+                    bbox=instances[div_i][-1],
                     )
                 self.trackers.append(trk)
 
             self.network.add_weighted_edges_from([[self.trackers[div[0]].id, self.count, 1],
                                                   [self.trackers[div[0]].id, self.count-1, 1]])
             self.trackers[div[0]].end = True
+            print("division: ", instances[div_i][0], " -> ", instances[div[1]][0], instances[div[2]][0])
 
 
 def get_image_feature(image, frame):
     labels = np.unique(image)
     labels = labels[labels != 0]
-    return [[i, frame] for i in labels]
+    return [[i, frame, get_bbox_from_mask(image == i)] for i in labels]
+
+
+def get_bbox_from_mask(mask):
+    # Find the non-zero mask elements
+    rows = np.any(mask, axis=1)
+    cols = np.any(mask, axis=0)
+
+    # Get the bounding box limits
+    y_min, y_max = np.where(rows)[0][[0, -1]]  # y_min, y_max (height range)
+    x_min, x_max = np.where(cols)[0][[0, -1]]  # x_min, x_max (width range)
+
+    # Return the bounding box as (x_min, y_min, x_max, y_max)
+    return [x_min, y_min, x_max, y_max]
+
+
+def bbox_overlapped(bbox1, bbox2):
+    if (bbox1[2] < bbox2[0]) or (bbox2[2] < bbox1[0]):
+        return False
+    if (bbox1[3] < bbox2[1]) or (bbox2[3] < bbox1[1]):
+        return False
+    return True
 
 
 if __name__ == "__main__":
