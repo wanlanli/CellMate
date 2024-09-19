@@ -55,6 +55,8 @@ class BaseTracker():
         for i in range(len(tracker)):
             if tracker[i].life_time() < self.min_hist:
                 continue
+            if (~tracker[i].end) & (tracker[i].last_update() < self.image.shape[0]-1):
+                continue
             frame = tracker[i].frame
             label = np.array(tracker[i].label, dtype=np.int_).reshape([-1, 1, 1])
             class_id = tracker[i].category()

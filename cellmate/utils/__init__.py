@@ -11,12 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from ._util import hash_func
+from ._util import hash_func, dump_to_pkl, load_from_pkl
 from ._geometric import angle_of_vectors, create_line, included_angle
 
 
 __all__ = [
     "hash_func",
+    "dump_to_pkl",
+    "load_from_pkl",
     "angle_of_vectors",
     "create_line",
     "included_angle"

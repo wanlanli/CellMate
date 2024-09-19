@@ -11,6 +11,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import pickle
+
 
 def hash_func(data):
     return {k: i for i, k in enumerate(data, 0)}
+
+
+def dump_to_pkl(obj: object, filename: str):
+    """Save object as pickle
+    obj: object
+    filename: save path
+    """
+    with open(filename, 'wb') as file:
+        pickle.dump(obj, file)
+
+
+def load_from_pkl(filename: str):
+    """Load pickle as object
+    filename: str, file path
+    """
+    with open(filename, 'rb') as file:
+        obj = pickle.load(file)
+    return obj
