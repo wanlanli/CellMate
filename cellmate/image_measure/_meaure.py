@@ -11,7 +11,7 @@ from .measure import CoordTree
 from cellmate.utils import create_line, angle_of_vectors, included_angle, hash_func
 
 
-class ImageMeasure(np.ndarray):
+class ImageMeasure():
     """Extract segemented regions' information from mask, åsuch as area,
     center, boundingbox ect. al..
     Parameters
@@ -19,19 +19,46 @@ class ImageMeasure(np.ndarray):
     input_array : 2D matrix,dtype:int
         mask is a int type 2d mask array. stored the labels of segementation.
     """
-    def __new__(cls, mask: np.ndarray):
-        # Input array is an already formed ndarray instance first cast to
-        # be our class type
-        obj = np.asarray(mask).view(cls)
-        # Finally, we must return the newly created object:
-        return obj
+    # def __new__(cls, mask: np.ndarray):
+    #     # Input array is an already formed ndarray instance first cast to
+    #     # be our class type
+    #     obj = np.asarray(mask).view(cls)
+    #     # Finally, we must return the newly created object:
+    #     return obj
 
-    def __array_finalize__(self, obj):
-        # see InfoArray.__array_finalize__ for comments
-        if obj is None:
-            return
-        #  instance properties in numpy array,
-        #  self._columns is the name of numpy each columns
+    # def __array_finalize__(self, obj):
+    #     # see InfoArray.__array_finalize__ for comments
+    #     if obj is None:
+    #         return
+    #     #  instance properties in numpy array,
+    #     #  self._columns is the name of numpy each columns
+    #     self._init_instance_properties()
+    #     #  create hash map for columns "name->index"
+    #     self.__hash_col = hash_func(self._columns)
+    #     #  create hash map for objects "label->index"
+    #     self.__hash_obj = hash_func(self._properties[:, 0])
+    #     self.__cost = self._init_cost_matrix()
+    #     self.pixel_resolution = 1
+    #     self.trees = self.init_trees()
+
+    # def __new__(cls, input_array, metadata=None):
+    #     # Convert input_array to an ndarray instance
+    #     obj = np.asarray(input_array).view(cls)
+    #     # Add custom attributes (optional)
+    #     obj.metadata = metadata
+    #     # Return the new object
+    #     return obj
+
+    # Override __init__ if you want to initialize additional attributes
+    def __init__(self, obj, metadata=None):
+        # self.metadata = metadata
+        # if obj is None:
+        #     return
+        # #  instance properties in numpy array,
+        # #  self._columns is the name of numpy each columns
+        self.data = obj
+        self._columns = None
+        self._properties = None
         self._init_instance_properties()
         #  create hash map for columns "name->index"
         self.__hash_col = hash_func(self._columns)
@@ -40,6 +67,7 @@ class ImageMeasure(np.ndarray):
         self.__cost = self._init_cost_matrix()
         self.pixel_resolution = 1
         self.trees = self.init_trees()
+
 
     def __index(self,
                 index: Union[int, Sequence] = None,
@@ -95,7 +123,7 @@ class ImageMeasure(np.ndarray):
         index: int, the order, from 0 to len(instances)
         label: int, the identify, equal with image values
         """
-        props, columns = regionprops_table(self.__array__(),
+        props, columns = regionprops_table(self.data, # self.__array__(),
                                            properties=IMAGE_MEASURE_PARAM,
                                            skeleton_length=SKELETON_LENGTH,
                                            coord_length=CONTOURS_LENGTH)
@@ -107,7 +135,7 @@ class ImageMeasure(np.ndarray):
         data[:, 1] = props[:, columns.index(CELL_IMAGE_PARAM.LABEL)] % DIVISION
         # is_border
         col = [columns.index(i) for i in CELL_IMAGE_PARAM.BOUNDING_BOX_LIST]
-        data[:, 2] = _cal_is_border(props[:, col], self.shape)
+        data[:, 2] = _cal_is_border(props[:, col], self.data.shape)
         columns += [CELL_IMAGE_PARAM.SEMANTIC_LABEL,
                     CELL_IMAGE_PARAM.INSTANCE_LABEL,
                     CELL_IMAGE_PARAM.IS_BORDER]
@@ -510,6 +538,8 @@ class ImageMeasure(np.ndarray):
         if targets is not None:
             targets = self.__index_trans(targets, ptype)
         neibor = self.__neighbor_node(center, targets)
+        if ptype == "label":
+            neibor = self.labels[neibor]
         return neibor
 
     def __neighbor_node(self, center: int,
@@ -528,14 +558,48 @@ class ImageMeasure(np.ndarray):
             if i != center:
                 near_points = self.__nearest_point(center, i)
                 sample_points = create_line(near_points[0], near_points[1])
-                sample_value = self.__array__()[sample_points[0],
+                sample_value = self.data[sample_points[0],
                                                 sample_points[1]]
-                source_value = [self.labels(center),
-                                self.labels(i), 0]
+                source_value = [self.label(center),
+                                self.label(i), 0]
                 flag = _isin_list(sample_value, source_value)
                 if flag:
                     selected.append(i)
         return selected
+
+    def __is_neighbor(self, obj1: int, obj2: int, threshold):
+        """
+        obj1: index 1
+        obj2: index 2
+        """
+        if self.distance_idx([obj1], [obj2])[0, 0, 1] > threshold:
+            return False
+        else:
+            p1, p2 = self.__nearest_point(obj1, obj2)
+            lines = create_line(p1, p2)
+            sample_value = self.data[lines[0], lines[1]]
+            flag = _isin_list(sample_value, [0, self.label(obj1), self.label(obj2)])
+            return flag
+
+    def is_neighbor(self, obj1: int, obj2: int, threshold: int = 100, ptype="index"):
+        obj1 = self.__index_trans(obj1, ptype)
+        obj2 = self.__index_trans(obj2, ptype)
+        return self.__is_neighbor(obj1, obj2, threshold)
+
+    def adjacent_matrix(self, threshold: int = 100):
+        """
+        threshold: if > threshold, not neighbor
+        """
+        length = len(self.labels)
+        connected_matrix = np.zeros((length, length))
+        for i in range(0, length-1):
+            for j in range(i+1, length):
+                if self.__is_neighbor(i, j, threshold):
+                    connected_matrix[i, j] = 1
+                    connected_matrix[j, i] = 1
+                else:
+                    continue
+        return connected_matrix
 
 
 def _isin_list(source: list, target: list):
