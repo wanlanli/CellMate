@@ -65,6 +65,9 @@ class BaseTracker():
                 traced_image[index][masks[f]] = tracker[i].id + class_id*DIVISION
         return traced_image
 
+    def all_trackers(self):
+        return self.tracker_end + self.trackers
+
     def distance_matrix(self):
         pass
 
