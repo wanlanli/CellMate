@@ -1,12 +1,12 @@
 import matplotlib as mpl
 
+
 class COLOR():
     def __init__(self, colorlist) -> None:
         self.colorlist = colorlist
 
     def linear(self):
-        return mpl.colors.LinearSegmentedColormap.from_list("",
-                    self.colorlist)
+        return mpl.colors.LinearSegmentedColormap.from_list("", self.colorlist)
 
     def list(self):
         return mpl.colors.ListedColormap(self.colorlist)

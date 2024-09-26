@@ -495,7 +495,7 @@ class RegionProperties:
         if len(self.skeleton_minor_axis) == 0:
             return 0
         else:
-            return np.sqrt((np.diff(self.skeleton_minor_axis, axis=0)**2).sum(axis=1))
+            return np.sqrt((np.diff(self.skeleton_minor_axis, axis=0)**2).sum(axis=1))[0]
 
     @property
     @only2d

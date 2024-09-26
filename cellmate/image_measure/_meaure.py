@@ -258,15 +258,15 @@ class ImageMeasure():
 
     @property
     def skeleton_lengths(self):
-        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON)]
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MAJOR_LENGTH)]
 
     def skeleton_length(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.skeleton_length[index]
+        return self.skeleton_lengths[index]
 
     @property
     def medial_minor_lengths(self):
-        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MAJOR_LENGTH)]
+        return self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MINOR_LENGTH)]
 
     def medial_minor_length(self, index=None, label=None):
         index = self.__index(index, label)

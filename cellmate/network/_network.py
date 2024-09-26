@@ -59,7 +59,7 @@ class NetCell(nx.DiGraph):
             (Includes the number of division and fusion events if applicable.)
         """
         upstream = self.upstream(node)
-        if len(self.parentes(node)) > 0:
+        if len(self.parents(node)) > 0:
             return len(upstream)
         else:
             return len(upstream)
@@ -103,9 +103,9 @@ class NetCell(nx.DiGraph):
             return [t for _, t in self.out_edges(ancient) if t != node][0]
         return None
 
-    def parentes(self, node):
+    def parents(self, node):
         """
-        Return the parentes node resulting from fusion in the directed graph.
+        Return the parents node resulting from fusion in the directed graph.
 
         Parameters:
         -----------
@@ -114,8 +114,8 @@ class NetCell(nx.DiGraph):
 
         Returns:
         ----------
-        parentes_id : list or []
-            The ID of the parentes node, if it exists; otherwise, None.
+        parents_id : list or []
+            The ID of the parents node, if it exists; otherwise, None.
         """
         in_edges = self.in_edges(node)
         if len(in_edges) == 2:
@@ -184,9 +184,12 @@ class NetCell(nx.DiGraph):
             return None
 
     def generation(self, node):
-        upstream = self.upstream(node)
-        gen = len(upstream)+1
-        return gen
+        if len(self.parents(node)) > 0:
+            return 0
+        else:
+            upstream = self.upstream(node)
+            gen = len(upstream)+1
+            return gen
 
     def feature(self, node):
         """
@@ -205,37 +208,11 @@ class NetCell(nx.DiGraph):
         """
         output = [0, None, None, [], [], None, None]
         # upstream = self.upstream(node)
-        output[0] = self.generation(node)  # len(upstream)+1
+        output[0] = self.layer(node)  # len(upstream)+1
         output[1] = self.ancient(node)
         output[2] = self.sister(node)
-        output[3] = self.parentes(node)
+        output[3] = self.parents(node)
         output[4] = self.daughter(node)
         output[5] = self.spouse(node)
         output[6] = self.daughter_sex(node)
-
-        # in_edges = self.in_edges(node)
-        # if len(in_edges) == 1:
-        #     output[1] = list(in_edges)[0][0]
-        #     output[2] = [t for _, t in self.out_edges(output[1]) if t != node][0]
-        # elif len(in_edges) == 2:
-        #     output[3] = [s for s, _ in in_edges]
-        #     output[0] += -1
-
-        # out_edges = self.out_edges(node)
-        # if len(out_edges) == 2:
-        #     output[4] = [t for _, t in out_edges]
-        # elif len(out_edges) == 1:
-        #     output[6] = list(out_edges)[0][1]
-        #     output[5] = [s for s, t in self.in_edges(output[6]) if t != node][0]
         return output
-
-    def relative_position(self):
-        # pos = {}
-        # for node in self .nodes:
-        #     f, x, y = np.where(traced_image%1000==node)
-        #     if len(f)>0:
-        #         f = np.median(f)
-        #         x = np.median(x)
-        #         y = np.median(y)
-        #         pos[node] = [y, -x]
-        pass

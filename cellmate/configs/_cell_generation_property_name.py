@@ -43,7 +43,7 @@ class _GenerationTreeParam(_PropertyBase):
     def columns(self):
         data = get_attr_items(_CellGenerationParamName)
         data = list(data.values())
-        return data[1:]
+        return data
 
 
 GENERATION_TREE = _GenerationTreeParam()
