@@ -270,7 +270,7 @@ class Tracker(BaseTracker):
             self.network.add_weighted_edges_from([[self.trackers[div[0]].id, self.count, 1],
                                                   [self.trackers[div[0]].id, self.count-1, 1]])
             self.trackers[div[0]].end = True
-            print("division: ", instances[div_i][0], " -> ", instances[div[1]][0], instances[div[2]][0])
+            print("division: ", self.trackers[div[0]].label[-1], " -> ", instances[div[1]][0], instances[div[2]][0])
 
 
 def get_image_feature(image, frame):
