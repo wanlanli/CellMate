@@ -158,7 +158,7 @@ def flatten_nonzero_value(data):
     return flatten
 
 
-def prediction_cell_type(fluorescent_image, masks, channel_number=2, bg_threshold=10, fc_threshold=70, n_components=2):
+def prediction_cell_type(fluorescent_image, masks, channel_number=2, bg_threshold=10, fc_threshold=50, n_components=2):
     bg = background(fluorescent_image, masks, threshold=bg_threshold)
     data = instance_fluorescent_intensity(fluorescent_image, masks, bg, measure_line=fc_threshold)
     fc = FluorescentClassification(data, channel_number=channel_number)

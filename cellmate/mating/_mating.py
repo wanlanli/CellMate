@@ -6,6 +6,7 @@ from cellmate.image_measure import ImageMeasure
 from ._cell import Cell
 from ._classification import prediction_cell_type
 from cellmate.configs import DIVISION
+import numpy as np
 
 
 class CellNetwork():
@@ -31,10 +32,15 @@ class CellNetwork():
                 continue
             else:
                 adj = measure.adjacent_matrix(threshold=threshold)
-                pandas = pd.DataFrame(adj, index=labels, columns=labels)
+
+                sorted_indices = np.argsort(labels)
+                adj = adj[np.ix_(sorted_indices, sorted_indices)]
+
+                pandas = pd.DataFrame(adj, index=labels[sorted_indices], columns=labels[sorted_indices])
                 space_network = nx.from_pandas_adjacency(pandas)
                 self.space_network.append(space_network)
                 self.space_net_map[i] = len(self.space_network) - 1
+
                 last_labels = set(labels)
 
         for c in tracker:
@@ -148,6 +154,37 @@ class CellNetwork():
                         feature = self.pair_feature(ref, n, t)
                     else:
                         feature = self.pair_feature(n, ref, t)
+                    if n == parents[1-i]:
+                        flag = True
+                    else:
+                        flag = False
+                    data.loc[index] = [ref, cell_ref.strain_type, flag]+feature
+                    index += 1
+        return data
+
+
+class CellNetwork90(CellNetwork):
+    def __init__(self, image, time_network, tracker, threshold) -> None:
+        super().__init__(image, time_network, tracker, threshold)
+
+    def potential_mating_feature(self, parents, time_step: int = 10):
+        columns = ['ref_id', 'ref_type', 'flag', 
+                   'p_id', 'm_id',
+                   'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
+                   'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
+                   'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm', 
+                   'center_dist', 'nearest_dist', 'time_stamp']
+        data = pd.DataFrame(None, columns=columns)
+        index = 0
+        for i, ref in enumerate(parents):
+            cell_ref = self.cells[ref]
+            start_time = cell_ref.start
+            end_time = cell_ref.end
+            time_table = list(range(start_time, end_time, time_step)) + [end_time]
+            for t in time_table:
+                mating_competent = self.neighbor(node=ref, time=t)
+                for n in mating_competent:
+                    feature = self.pair_feature(ref, n, t)
                     if n == parents[1-i]:
                         flag = True
                     else:
