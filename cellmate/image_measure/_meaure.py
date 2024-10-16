@@ -19,44 +19,11 @@ class ImageMeasure():
     input_array : 2D matrix,dtype:int
         mask is a int type 2d mask array. stored the labels of segementation.
     """
-    # def __new__(cls, mask: np.ndarray):
-    #     # Input array is an already formed ndarray instance first cast to
-    #     # be our class type
-    #     obj = np.asarray(mask).view(cls)
-    #     # Finally, we must return the newly created object:
-    #     return obj
-
-    # def __array_finalize__(self, obj):
-    #     # see InfoArray.__array_finalize__ for comments
-    #     if obj is None:
-    #         return
-    #     #  instance properties in numpy array,
-    #     #  self._columns is the name of numpy each columns
-    #     self._init_instance_properties()
-    #     #  create hash map for columns "name->index"
-    #     self.__hash_col = hash_func(self._columns)
-    #     #  create hash map for objects "label->index"
-    #     self.__hash_obj = hash_func(self._properties[:, 0])
-    #     self.__cost = self._init_cost_matrix()
-    #     self.pixel_resolution = 1
-    #     self.trees = self.init_trees()
-
-    # def __new__(cls, input_array, metadata=None):
-    #     # Convert input_array to an ndarray instance
-    #     obj = np.asarray(input_array).view(cls)
-    #     # Add custom attributes (optional)
-    #     obj.metadata = metadata
-    #     # Return the new object
-    #     return obj
-
-    # Override __init__ if you want to initialize additional attributes
-    def __init__(self, obj, metadata=None):
-        # self.metadata = metadata
-        # if obj is None:
-        #     return
-        # #  instance properties in numpy array,
-        # #  self._columns is the name of numpy each columns
+    def __init__(self, obj, pixel_size=1, sampling_interval=1, equidistant=False):
         self.data = obj
+        self.pixel_size = pixel_size
+        self.sampling_interval = sampling_interval
+        self.equidistant = equidistant
         self._columns = None
         self._properties = None
         self._init_instance_properties()
@@ -65,9 +32,7 @@ class ImageMeasure():
         #  create hash map for objects "label->index"
         self.__hash_obj = hash_func(self._properties[:, 0])
         self.__cost = self._init_cost_matrix()
-        self.pixel_resolution = 1
         self.trees = self.init_trees()
-
 
     def __index(self,
                 index: Union[int, Sequence] = None,
@@ -123,8 +88,11 @@ class ImageMeasure():
         index: int, the order, from 0 to len(instances)
         label: int, the identify, equal with image values
         """
-        props, columns = regionprops_table(self.data, # self.__array__(),
+        props, columns = regionprops_table(self.data,  # self.__array__(),
                                            properties=IMAGE_MEASURE_PARAM,
+                                           pixel_size=self.pixel_size,
+                                           sampling_interval=self.sampling_interval,
+                                           equidistant=self.equidistant,
                                            skeleton_length=SKELETON_LENGTH,
                                            coord_length=CONTOURS_LENGTH)
         props = props.T
@@ -233,8 +201,7 @@ class ImageMeasure():
 
     @property
     def coordinates(self):
-        return np.array(list(self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.COORDINATE)]),
-                        dtype=np.float_)
+        return list(self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.COORDINATE)])
 
     def coordinate(self, index=None, label=None):
         index = self.__index(index, label)

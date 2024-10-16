@@ -318,36 +318,36 @@ def _line_intersection(x1, y1, x2, y2, x3, y3, x4, y4):
         # intersections.append((intersect_x, intersect_y, t))
 
 
-def find_contours_smooth(image, smooth_point: int = 60, *args, **kwarg):
-    """
-    Finds contours in a binary image and smooths the first contour found using spline interpolation.
+# def find_contours_smooth(image, smooth_point: int = 60, *args, **kwarg):
+#     """
+#     Finds contours in a binary image and smooths the first contour found using spline interpolation.
 
-    Parameters:
-    -----------
-    image : array-like
-        A 2D binary image (or any suitable image) where contours are to be found.
+#     Parameters:
+#     -----------
+#     image : array-like
+#         A 2D binary image (or any suitable image) where contours are to be found.
 
-    smooth_point : int, optional
-        The number of points to generate along the smoothed contour. Default is 100.
+#     smooth_point : int, optional
+#         The number of points to generate along the smoothed contour. Default is 100.
 
-    *args : tuple
-        Additional positional arguments to be passed to the `find_contours` function.
+#     *args : tuple
+#         Additional positional arguments to be passed to the `find_contours` function.
 
-    **kwarg : dict
-        Additional keyword arguments to be passed to the `find_contours` function.
+#     **kwarg : dict
+#         Additional keyword arguments to be passed to the `find_contours` function.
 
-    Returns:
-    --------
-    numpy.ndarray or None
-        A 2D array of shape (smooth_point, 2) containing the smoothed contour points, 
-        or None if no contours are found.
-    """
-    contours = find_contours(image=image, *args, **kwarg)
-    if len(contours) > 0:
-        contours_smoothed = smooth_curve(contours[0], smooth_point, s=20)
-        return contours_smoothed
-    else:
-        return None
+#     Returns:
+#     --------
+#     numpy.ndarray or None
+#         A 2D array of shape (smooth_point, 2) containing the smoothed contour points, 
+#         or None if no contours are found.
+#     """
+#     contours = find_contours(image=image, *args, **kwarg)
+#     if len(contours) > 0:
+#         contours_smoothed = smooth_curve(contours[0], smooth_point, s=20)
+#         return contours_smoothed
+#     else:
+#         return None
 
 
 def perpendicular(p1, p2, coords):

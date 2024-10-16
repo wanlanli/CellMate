@@ -2,7 +2,7 @@ import inspect
 from functools import wraps
 from math import atan2
 from math import pi as PI
-from math import sqrt
+from math import sqrt, ceil
 from warnings import warn
 
 import numpy as np
@@ -11,9 +11,10 @@ from scipy import ndimage as ndi
 
 from . import _moments
 from ._regionprops_utils import euler_number, perimeter, perimeter_crofton, _normalize_spacing
-from ._skeleton_cell import (perpendicular_grid, skeletonize_cell, smooth_curve, 
-                             find_tips, find_tips_axis, find_contours_smooth)
+from ._skeleton_cell import (perpendicular_grid, skeletonize_cell, smooth_curve,
+                             find_tips, find_tips_axis)
 from ._distance import CoordTree
+from ._find_contours import find_contours
 __all__ = ['regionprops', 'euler_number', 'perimeter', 'perimeter_crofton']
 
 
@@ -269,7 +270,8 @@ class RegionProperties:
 
     def __init__(self, slice, label, label_image, intensity_image,
                  cache_active, *, extra_properties=None, spacing=None,
-                 offset=None, pad=1, skeleton_length=22, coord_length=60):
+                 offset=None, pad=1, pixel_size=1, sampling_interval=1,
+                 skeleton_length=22, coord_length=60, equidistant=True):
 
         if intensity_image is not None:
             ndim = label_image.ndim
@@ -289,6 +291,12 @@ class RegionProperties:
         self._offset = np.array(offset)
 
         self._pad = pad
+        self.pixel_size = pixel_size
+        self.sampling_interval = sampling_interval
+        self.equidistant = equidistant
+        if self.equidistant:
+            self.pixel_distance = int(self.sampling_interval / self.pixel_size)
+            # print(self.sampling_interval, self.pixel_size, self.pixel_distance)
         self._skeleton_length = skeleton_length
         self._coord_length = coord_length
         self.slice = slice
@@ -410,26 +418,29 @@ class RegionProperties:
         return (object_offset + indices) * self._spacing + self._offset
 
     @property
-    @_cached
-    def coords_raw_pad(self):
-        return find_contours_smooth(self.image_pad, smooth_point=self._coord_length)
+    def centroid_local(self):
+        M = self.moments
+        M0 = M[(0,) * self._ndim]
+
+        def _get_element(axis):
+            return (0,) * axis + (1,) + (0,) * (self._ndim - 1 - axis)
+
+        return np.asarray(
+            tuple(M[_get_element(axis)] / M0 for axis in range(self._ndim)))
 
     @property
     @_cached
-    def skeleton(self):
-        path = skeletonize_cell(self.image_pad)
-        if (path is None) or (len(path) < 3):
-            path = self._axis_tips()[:3]
-            path = path + [self._pad, self._pad]
-            path = find_tips_axis(path, self.coords_raw_pad)
+    def coords_raw_pad(self):
+        contours = find_contours(image=self.image_pad)
+        if len(contours) > 0:
+            if self.equidistant:
+                perimeter = circumference(contours[0], closed=True)
+                self._coord_length = ceil(perimeter / self.pixel_distance) + 1
+            contours_smoothed = smooth_curve(contours[0], self._coord_length, s=20)
+            # print(contours_smoothed.shape)
+            return contours_smoothed
         else:
-            path = find_tips(path, self.coords_raw_pad)
-
-        path = smooth_curve(path, num_points=self._skeleton_length)
-        path = path - [self._pad, self._pad]
-        object_offset = np.array([self.slice[i].start for i in range(self._ndim)])
-        path = object_offset + path + self._offset
-        return path
+            return None
 
     @property
     @_cached
@@ -453,6 +464,27 @@ class RegionProperties:
         return CoordTree(self.coords)
 
     @property
+    @_cached
+    def skeleton(self):
+        path = skeletonize_cell(self.image_pad)
+        if (path is None) or (len(path) < 3):
+            path = self._axis_tips()[:3]
+            path = path + [self._pad, self._pad]
+            path = find_tips_axis(path, self.coords_raw_pad)
+        else:
+            path = find_tips(path, self.coords_raw_pad)
+        if self.equidistant:
+            perimeter = circumference(path, closed=False)
+            self._skeleton_length = ceil(perimeter / self.pixel_distance) + 1
+            if (self._skeleton_length % 2) != 0:
+                self._skeleton_length += 1
+        path = smooth_curve(path, num_points=self._skeleton_length)
+        path = path - [self._pad, self._pad]
+        object_offset = np.array([self.slice[i].start for i in range(self._ndim)])
+        path = object_offset + path + self._offset
+        return path
+
+    @property
     def skeleton_major_length(self):
         if len(self.skeleton) == 0:
             return 0
@@ -471,8 +503,11 @@ class RegionProperties:
         return self.skeleton_minor_grid[index]
 
     @property
-    def skeleton_center(self):
-        return self.skeleton_minor_axis.sum(axis=0)/2
+    def skeleton_minor_length(self):
+        if len(self.skeleton_minor_axis) == 0:
+            return 0
+        else:
+            return np.sqrt((np.diff(self.skeleton_minor_axis, axis=0)**2).sum(axis=1))[0]
 
     @property
     @_cached
@@ -491,11 +526,8 @@ class RegionProperties:
             return None
 
     @property
-    def skeleton_minor_length(self):
-        if len(self.skeleton_minor_axis) == 0:
-            return 0
-        else:
-            return np.sqrt((np.diff(self.skeleton_minor_axis, axis=0)**2).sum(axis=1))[0]
+    def skeleton_center(self):
+        return self.skeleton_minor_axis.sum(axis=0)/2
 
     @property
     @only2d
@@ -566,17 +598,6 @@ class RegionProperties:
 
     def _image_intensity_double(self):
         return self.image_intensity.astype(np.float64, copy=False)
-
-    @property
-    def centroid_local(self):
-        M = self.moments
-        M0 = M[(0,) * self._ndim]
-
-        def _get_element(axis):
-            return (0,) * axis + (1,) + (0,) * (self._ndim - 1 - axis)
-
-        return np.asarray(
-            tuple(M[_get_element(axis)] / M0 for axis in range(self._ndim)))
 
     @property
     def intensity_max(self):
@@ -858,6 +879,7 @@ def _props_to_numpy(regions, properties=('label', 'bbox'), separator='_'):
 def regionprops_table(label_image, intensity_image=None,
                       properties=('label', 'bbox'), *, cache=True,
                       separator='_', extra_properties=None, spacing=None,
+                      pixel_size=1, sampling_interval=1, equidistant=True,
                       skeleton_length=22, coord_length=60,
                       ):
     """Compute image properties and return them as a pandas-compatible table.
@@ -996,6 +1018,7 @@ def regionprops_table(label_image, intensity_image=None,
     """
     regions = regionprops(label_image, intensity_image=intensity_image,
                           cache=cache, extra_properties=extra_properties, spacing=spacing,
+                          pixel_size=pixel_size, sampling_interval=sampling_interval, equidistant=equidistant,
                           skeleton_length=skeleton_length, coord_length=coord_length)
     if extra_properties is not None:
         properties = (
@@ -1011,7 +1034,10 @@ def regionprops_table(label_image, intensity_image=None,
                     dtype=intensity_image.dtype
                     )
         regions = regionprops(label_image, intensity_image=intensity_image,
-                              cache=cache, extra_properties=extra_properties, spacing=spacing)
+                              cache=cache, extra_properties=extra_properties, spacing=spacing,
+                              pixel_size=1, sampling_interval=1, equidistant=True,
+                              skeleton_length=22, coord_length=60
+                              )
 
         out_d, columns = _props_to_numpy(regions, properties=properties,
                                          separator=separator)
@@ -1024,6 +1050,7 @@ def regionprops_table(label_image, intensity_image=None,
 
 def regionprops(label_image, intensity_image=None, cache=True,
                 *, extra_properties=None, spacing=None, offset=None,
+                pixel_size=1, sampling_interval=1, equidistant=True,
                 skeleton_length=22, coord_length=60):
     r"""Measure properties of labeled image regions.
 
@@ -1323,6 +1350,7 @@ def regionprops(label_image, intensity_image=None, cache=True,
         props = RegionProperties(sl, label, label_image, intensity_image,
                                  cache, spacing=spacing, extra_properties=extra_properties,
                                  offset=offset_arr,
+                                 pixel_size=pixel_size, sampling_interval=sampling_interval, equidistant=equidistant,
                                  skeleton_length=skeleton_length, coord_length=coord_length)
         regions.append(props)
 
@@ -1348,76 +1376,94 @@ def _install_properties_docs():
         getattr(RegionProperties, p).__doc__ = prop_doc[p]
 
 
-def resample_equal_distance(points, num_points):
+# def resample_equal_distance(points, num_points):
+#     """
+#     Resample a given set of points along a contour to produce a specified number of points,
+#     spaced equally in terms of distance along the contour.
+
+#     Parameters:
+#     points (np.ndarray): An array of shape (n, 2) representing n points along a 2D contour.
+#     num_points (int): The desired number of resampled points.
+
+#     Returns:
+#     np.ndarray: An array of shape (num_points, 2) containing the resampled points.
+#     """
+
+#     # Compute the cumulative distance along the contour
+#     # np.diff(points, axis=0) computes the difference between consecutive points
+#     # np.sqrt(np.sum(..., axis=1)) gives the Euclidean distance between each pair of consecutive points
+#     # np.cumsum(...) computes the cumulative distance along the contour
+#     distance = np.cumsum(np.sqrt(np.sum(np.diff(points, axis=0) ** 2, axis=1)))
+
+#     # Insert a zero at the beginning to represent the start of the contour
+#     distance = np.insert(distance, 0, 0)
+
+#     # Protect against division by zero by adding a small epsilon to the total distance
+#     epsilon = 1e-10
+#     normalized_distance = distance / (distance[-1] + epsilon)
+
+#     # Create an array of uniformly spaced distance values in the range [0, 1]
+#     alpha = np.linspace(0, 1, num_points)
+
+#     # Find the indices in 'normalized_distance' that are closest to each value in 'alpha'
+#     indices = np.searchsorted(normalized_distance, alpha, side='right') - 1
+
+#     # Clip the next indices to ensure they stay within the bounds of the array
+#     next_indices = np.clip(indices + 1, 0, len(points) - 1)
+
+#     # Compute the weights for linear interpolation between points[indices] and points[next_indices]
+#     weights = (alpha - normalized_distance[indices]) / (normalized_distance[next_indices] - normalized_distance[indices] + epsilon)
+
+#     # Linearly interpolate between the points to obtain the resampled points
+#     result = (1 - weights)[:, np.newaxis] * points[indices] + weights[:, np.newaxis] * points[next_indices]
+
+#     return result
+
+
+# def angle_between_points_array(p1, p2):
+#     """
+#     Calculates the angle between pairs of 2D vectors represented by the rows of p1 and p2.
+#     The angles are in the range [0, 2π].
+
+#     Parameters:
+#     p1 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
+#     p2 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
+
+#     Returns:
+#     np.ndarray: A 1D array of angles (in radians) between each corresponding pair of vectors in p1 and p2.
+#     """
+
+#     # Calculate the dot product of corresponding vectors in p1 and p2
+#     dot = np.sum(p1 * p2, axis=1)
+
+#     # Calculate the determinant (cross product in 2D) for each pair of vectors
+#     deter = p1[:, 0] * p2[:, 1] - p1[:, 1] * p2[:, 0]
+
+#     # Calculate the angle using arctan2 to account for the sign and quadrant
+#     angles = np.arctan2(deter, dot)
+
+#     # Normalize the angles to the range [0, 2π]
+#     angles[angles < 0] += 2 * np.pi
+
+#     return angles
+
+
+def circumference(points, closed=False):
     """
-    Resample a given set of points along a contour to produce a specified number of points,
-    spaced equally in terms of distance along the contour.
+    Calculate the length of a curve given a list of 2D points using numpy.
 
     Parameters:
-    points (np.ndarray): An array of shape (n, 2) representing n points along a 2D contour.
-    num_points (int): The desired number of resampled points.
+    points (list of tuples or np.ndarray): A list or array of (x, y) coordinates representing points on the curve.
 
     Returns:
-    np.ndarray: An array of shape (num_points, 2) containing the resampled points.
+    float: The total length of the curve.
     """
-
-    # Compute the cumulative distance along the contour
-    # np.diff(points, axis=0) computes the difference between consecutive points
-    # np.sqrt(np.sum(..., axis=1)) gives the Euclidean distance between each pair of consecutive points
-    # np.cumsum(...) computes the cumulative distance along the contour
-    distance = np.cumsum(np.sqrt(np.sum(np.diff(points, axis=0) ** 2, axis=1)))
-
-    # Insert a zero at the beginning to represent the start of the contour
-    distance = np.insert(distance, 0, 0)
-
-    # Protect against division by zero by adding a small epsilon to the total distance
-    epsilon = 1e-10
-    normalized_distance = distance / (distance[-1] + epsilon)
-
-    # Create an array of uniformly spaced distance values in the range [0, 1]
-    alpha = np.linspace(0, 1, num_points)
-
-    # Find the indices in 'normalized_distance' that are closest to each value in 'alpha'
-    indices = np.searchsorted(normalized_distance, alpha, side='right') - 1
-
-    # Clip the next indices to ensure they stay within the bounds of the array
-    next_indices = np.clip(indices + 1, 0, len(points) - 1)
-
-    # Compute the weights for linear interpolation between points[indices] and points[next_indices]
-    weights = (alpha - normalized_distance[indices]) / (normalized_distance[next_indices] - normalized_distance[indices] + epsilon)
-
-    # Linearly interpolate between the points to obtain the resampled points
-    result = (1 - weights)[:, np.newaxis] * points[indices] + weights[:, np.newaxis] * points[next_indices]
-
-    return result
-
-
-def angle_between_points_array(p1, p2):
-    """
-    Calculates the angle between pairs of 2D vectors represented by the rows of p1 and p2.
-    The angles are in the range [0, 2π].
-
-    Parameters:
-    p1 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
-    p2 (np.ndarray): A 2D array of shape (n, 2), where each row is a 2D vector.
-
-    Returns:
-    np.ndarray: A 1D array of angles (in radians) between each corresponding pair of vectors in p1 and p2.
-    """
-
-    # Calculate the dot product of corresponding vectors in p1 and p2
-    dot = np.sum(p1 * p2, axis=1)
-
-    # Calculate the determinant (cross product in 2D) for each pair of vectors
-    deter = p1[:, 0] * p2[:, 1] - p1[:, 1] * p2[:, 0]
-
-    # Calculate the angle using arctan2 to account for the sign and quadrant
-    angles = np.arctan2(deter, dot)
-
-    # Normalize the angles to the range [0, 2π]
-    angles[angles < 0] += 2 * np.pi
-
-    return angles
+    if closed:
+        diff = np.diff(points, axis=0, append=points[0:1])  # Close the circle by adding the first point to the end
+    else:
+        diff = np.diff(points, axis=0)
+    distances = np.linalg.norm(diff, axis=1)
+    return np.sum(distances)
 
 
 if __debug__:
