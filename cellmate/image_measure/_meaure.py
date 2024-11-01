@@ -31,6 +31,7 @@ class ImageMeasure():
         self.__hash_col = hash_func(self._columns)
         #  create hash map for objects "label->index"
         self.__hash_obj = hash_func(self._properties[:, 0])
+        self.set_pixel_size()
         self.__cost = self._init_cost_matrix()
         self.trees = self.init_trees()
 
@@ -109,8 +110,16 @@ class ImageMeasure():
                     CELL_IMAGE_PARAM.IS_BORDER]
         self._columns = columns
         self._properties = np.concatenate((props, data), axis=1)
-    # get properties
 
+    def set_pixel_size(self):
+        if self.pixel_size != 1:
+            self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.AREA)] *= self.pixel_size**2
+            self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MAJOR_AXIS)] *= self.pixel_size
+            self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.MINOR_AXIS)] *= self.pixel_size
+            self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MAJOR_LENGTH)] *= self.pixel_size
+            self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MINOR_LENGTH)] *= self.pixel_size
+            self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_GRID_LENGTH)] *= self.pixel_size
+    # get properties
     def init_trees(self):
         trees = []
         for i in range(0, self._properties.shape[0]):
