@@ -10,7 +10,7 @@ import numpy as np
 
 
 class CellNetwork():
-    def __init__(self, image, time_network, tracker, threshold) -> None:
+    def __init__(self, image, time_network, tracker, threshold, *args, **kwargs) -> None:
         self.image = image
         self.time_network = time_network
         self.neighbor_threshold = threshold
@@ -24,7 +24,7 @@ class CellNetwork():
         last_labels = set([])
         for i in trange(0, self.image.shape[0]):
             mask = self.image[i]
-            measure = ImageMeasure(mask)
+            measure = ImageMeasure(mask, *args, **kwargs)
             self.measure.append(measure)
             labels = measure.labels % DIVISION
             if set(labels) == last_labels:
@@ -179,8 +179,8 @@ class CellNetwork():
 
 
 class CellNetwork90(CellNetwork):
-    def __init__(self, image, time_network, tracker, threshold) -> None:
-        super().__init__(image, time_network, tracker, threshold)
+    def __init__(self, image, time_network, tracker, threshold,  *args, **kwargs) -> None:
+        super().__init__(image, time_network, tracker, threshold,  *args, **kwargs)
 
     def potential_mating_feature(self, parents, time_step: int = 10):
         columns = ['ref_id', 'ref_type', 'flag',
