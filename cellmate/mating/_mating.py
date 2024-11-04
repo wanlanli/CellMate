@@ -57,8 +57,10 @@ class CellNetwork():
     def create_cells(self):
         pass
 
-    def create_cell_type(self, fluorescent_image):
-        cell_pred, data = prediction_cell_type(fluorescent_image, self.image)
+    def create_cell_type(self, fluorescent_image, mask=None, *arg, **kwargs):
+        if mask is None:
+            mask = self.image
+        cell_pred, data = prediction_cell_type(fluorescent_image, mask, *arg, **kwargs)
         type_maps = cell_pred.to_dict()
         for k, v in type_maps.items():
             self.cells[k % DIVISION].strain_type = v
@@ -162,13 +164,26 @@ class CellNetwork():
                     index += 1
         return data
 
+    def label_trans(self, time):
+        """
+        Translate a global label into a time-specific label in the measure.
+
+        Parameters:
+        time (int): The time point for which to translate the label.
+
+        Returns:
+        dict: A dictionary mapping the global label (modulo division) to the original label.
+        """
+        measure = self.measure[time]
+        return dict(zip(measure.labels % DIVISION, measure.labels))
+
 
 class CellNetwork90(CellNetwork):
     def __init__(self, image, time_network, tracker, threshold) -> None:
         super().__init__(image, time_network, tracker, threshold)
 
     def potential_mating_feature(self, parents, time_step: int = 10):
-        columns = ['ref_id', 'ref_type', 'flag', 
+        columns = ['ref_id', 'ref_type', 'flag',
                    'p_id', 'm_id',
                    'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
