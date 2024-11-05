@@ -13,9 +13,12 @@
 # limitations under the License.
 
 from ._patchcell import CellNetworkPatch
-from ._utils import intensity_multiple_points
+from ._utils import intensity_multiple_points, circular_sequence, resample_curve, move_to_center
 
 __all__ = [
     "CellNetworkPatch",
     "intensity_multiple_points",
+    "circular_sequence",
+    "resample_curve",
+    "move_to_center"
 ]

@@ -119,6 +119,7 @@ class ImageMeasure():
             self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MAJOR_LENGTH)] *= self.pixel_size
             self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_MINOR_LENGTH)] *= self.pixel_size
             self._properties[:, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON_GRID_LENGTH)] *= self.pixel_size
+
     # get properties
     def init_trees(self):
         trees = []
@@ -361,8 +362,8 @@ class ImageMeasure():
         """Given two regions' label, return 2 types distance between 2 regions.
         Parameters
         ----------
-        target :int, index of target point
-        source :int, index of source point
+        target :int, index of target object
+        source :int, index of source object
         Notes
         ----------
         """
@@ -576,6 +577,31 @@ class ImageMeasure():
                 else:
                     continue
         return connected_matrix
+
+    def nearest_coordinate(self,
+                           source: Union[int, Sequence[int]],
+                           points: np.array,
+                           ptype="index"):
+        """
+        Calculates the nearest point and the distance from a source region to a set of target points.
+
+        Parameters
+        ----------
+        source : int
+            int or list, source point(s)' index or label (Mark with ptype).
+        points : np.ndarray
+            A 2D array where each row represents a point [x, y] in the target region.
+
+        Returns
+        -------
+        list
+            A list containing two elements:
+            - nearnest_dis: The minimum distance between the source and the nearest target point.
+            - idx_src: Index of the nearest point in the target region relative to the source.
+        """
+        source_index = self.__index_trans(source, ptype)
+        nearnest_dis, idx_src = self.trees[source_index].topn(points)
+        return [nearnest_dis, idx_src]
 
 
 def _isin_list(source: list, target: list):

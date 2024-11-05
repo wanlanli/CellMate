@@ -12,6 +12,7 @@ import numpy as np
 class CellNetwork():
     def __init__(self, image, time_network, tracker, threshold, *args, **kwargs) -> None:
         self.image = image
+        self.frame_number = self.image.shape[0]
         self.time_network = time_network
         self.neighbor_threshold = threshold
         self.space_net = None
@@ -48,7 +49,13 @@ class CellNetwork():
                 gen_feature = time_network.feature(c.id)
             else:
                 gen_feature = [0, None, None, [], [], None, None]
-            self.cells[c.id] = Cell(id=c.id, frames=c.frame, generation_tree=gen_feature)
+            frames = np.array(c.frame)
+            frames = frames[frames < self.frame_number]
+            self.cells[c.id] = Cell(id=c.id, frames=frames, generation_tree=gen_feature)
+
+        self.label_map = []
+        for t in range(0, self.image.shape[0]):
+            self.label_map.append(self.label_trans(t))
 
     def space_network_t(self, time):
         index = self.space_net_map[time]
@@ -176,6 +183,38 @@ class CellNetwork():
         """
         measure = self.measure[time]
         return dict(zip(measure.labels % DIVISION, measure.labels))
+
+    def coord_overtime(self, cell_id):
+        pass
+
+    def tips_overtime(self, cell_id):
+        tips = []
+        frames = self.cells[cell_id].frames
+        for time in frames:
+            cell_label_t = self.label_map[time][cell_id]
+            tips.append(self.measure[time].tip(label=cell_label_t))
+        tips = np.array(tips)
+        return tips
+
+    def coords_overtime(self, cell_id):
+        coords = []
+        frames = self.cells[cell_id].frames
+        for time in frames:
+            cell_label_t = self.label_map[time][cell_id]
+            coords.append(self.measure[time].coordinate(label=cell_label_t))
+        coords = np.array(coords)
+        print(coords.shape)
+        return coords
+
+    def center_overtime(self, cell_id):
+        coords = []
+        frames = self.cells[cell_id].frames
+        for time in frames:
+            cell_label_t = self.label_map[time][cell_id]
+            coords.append(self.measure[time].center(label=cell_label_t))
+        coords = np.array(coords)
+        print(coords.shape)
+        return coords
 
 
 class CellNetwork90(CellNetwork):

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import numpy as np
+from scipy.interpolate import interp1d
+from scipy.ndimage import  binary_erosion
 
 
 def move_to_center(point, center=[0, 0], dist=5):
@@ -71,7 +73,11 @@ def intensity_multiple_points(image, centers, radius, mask, method="mean", perce
     # Create a mesh grid with the coordinates of the image
     x, y = circle_grid(image.shape)
     intensities = []
-    background = np.percentile(image[mask], background_percentile)
+    erosion = binary_erosion(mask, structure=np.ones((radius*2, radius*2)), border_value=True)
+    background = np.percentile(image[erosion], background_percentile)
+
+    # np.array([np.mean(self.fluorescence_image[i][:, self.erosion[i] > 0], axis=1)
+    #                                                 for i in self.frames])
     for center in centers:
         distance = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
         mask_i = (distance <= radius) & mask
@@ -82,7 +88,8 @@ def intensity_multiple_points(image, centers, radius, mask, method="mean", perce
             elif method == "sum":
                 intensity = circular_region.sum()
             elif method == "percentile":
-                intensity = np.percentile(circular_region, percentile)
+                threshold = np.percentile(circular_region, percentile)
+                intensity = circular_region[circular_region > threshold].mean()
             else:
                 intensity = circular_region.mean()
         else:
@@ -98,3 +105,91 @@ def center_bg_norm(intensity, bg):
     # intensity_norm = intensity_norm / np.nanmedian(intensity_norm, where=intensity_norm>0, axis=1, keepdims=1)
     # intensity_norm = (intensity_norm - intensity_norm.min()) / (intensity_norm.max()-intensity_norm.min())
     return intensity_norm
+
+
+def centre_points(points: np.ndarray) -> np.ndarray:
+    """
+    Calculates the centroid of a set of points based on the median position of x and y coordinates.
+    This function can be adapted to support other methods of calculating central points.
+
+    Parameters:
+    points (np.ndarray): A 2D array where each row represents a point with [x, y] coordinates.
+
+    Returns:
+    np.ndarray: A 1D array with the x and y coordinates of the centroid (median position).
+    """
+    # Calculate the median (50th percentile) for x and y coordinates to determine the centroid
+    center_x = np.percentile(points[:, 0], 50)
+    center_y = np.percentile(points[:, 1], 50)
+
+    return np.array([center_x, center_y])
+
+
+def circular_sequence(start: int, end: int, max_id: int, include_end=True):
+    """
+    Generates a circular sequence from a start to an end index within a circular range.
+
+    Parameters
+    ----------
+    start : int
+        The starting index of the sequence.
+    end : int
+        The ending index of the sequence.
+    max_id : int
+        The maximum value in the circular range (inclusive).
+
+    Returns
+    -------
+    List[int]
+        A list representing the circular sequence from start to end.
+
+    Example
+    -------
+    If max_id = 10, start = 7, and end = 4, the output will be:
+    [7, 8, 9, 0, 1, 2, 3]
+    """
+
+    sequence = []
+    end = end % max_id
+    start = start % max_id
+
+    current = start
+    while current != end:
+        sequence.append(current)
+        current = (current + 1) % (max_id)
+    if include_end:
+        sequence.append(end)  # Include the end point in the sequence
+    return sequence
+
+
+def resample_curve(points: np.ndarray, num_samples: int) -> np.ndarray:
+    """
+    Resamples a curve represented by a set of points to have evenly spaced points.
+
+    Parameters
+    ----------
+    points : np.ndarray
+        An (n, 2) array of points representing the curve, where each row is [x, y].
+    num_samples : int
+        The desired number of points in the resampled curve.
+
+    Returns
+    -------
+    np.ndarray
+        An (m, 2) array of resampled points with equal distance between samples.
+    """
+    # Calculate cumulative distances between consecutive points
+    distances = np.sqrt(np.sum(np.diff(points, axis=0)**2, axis=1))
+    cumulative_distances = np.insert(np.cumsum(distances), 0, 0)
+
+    # Set up an interpolation function for x and y coordinates
+    interp_x = interp1d(cumulative_distances, points[:, 0], kind='linear')
+    interp_y = interp1d(cumulative_distances, points[:, 1], kind='linear')
+
+    # Generate equally spaced distances along the curve
+    target_distances = np.linspace(0, cumulative_distances[-1], num_samples)
+
+    # Interpolate to get new points
+    resampled_points = np.vstack((interp_x(target_distances), interp_y(target_distances))).T
+
+    return resampled_points
