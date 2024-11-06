@@ -23,8 +23,8 @@ class CellNetworkPatch(CellNetwork90):
         center_tip_1, center_tip_2 = self.center_tips(cell_id)
         coords = self.coords_overtime(cell_id)
         new_coords = []
-        for time in self.cells[cell_id].frames:
-            coord_t = coords[time]
+        for i, time in enumerate(self.cells[cell_id].frames):
+            coord_t = coords[i]
             cell_label_t = self.label_trans(time)[cell_id]
             _, tip_1_index = self.measure[time].nearest_coordinate(cell_label_t, [center_tip_1], ptype="label")
             tip_1_index = tip_1_index[0][0]

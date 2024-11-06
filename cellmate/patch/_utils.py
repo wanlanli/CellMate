@@ -193,3 +193,45 @@ def resample_curve(points: np.ndarray, num_samples: int) -> np.ndarray:
     resampled_points = np.vstack((interp_x(target_distances), interp_y(target_distances))).T
 
     return resampled_points
+
+
+def intensity_multiple_points_debug(image, centers, radius, mask, method="mean", percentile=50, background_percentile=50):
+    """
+    Calculate the mean intensity of circular regions for multiple points in the image, excluding zero values.
+
+    Parameters:
+    image (2D array-like): The image from which to calculate the intensity.
+    centers (list of tuples): A list of (x, y) coordinates for the center of each circle.
+    radius (float): The radius of the circles.
+
+    Returns:
+    list: A list of mean intensities for each circular region, excluding zero values.
+    """
+    # Create a mesh grid with the coordinates of the image
+    x, y = circle_grid(image.shape)
+    intensities = []
+    erosion = binary_erosion(mask, structure=np.ones((radius*2, radius*2)), border_value=True)
+    background = np.percentile(image[erosion], background_percentile)
+
+    # np.array([np.mean(self.fluorescence_image[i][:, self.erosion[i] > 0], axis=1)
+    #                                                 for i in self.frames])
+    mask_i_measure = np.zeros(mask.shape, dtype=np.bool_)
+    for center in centers:
+        distance = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
+        mask_i = (distance <= radius) & mask
+        circular_region = image[mask_i]
+        if len(circular_region) > 0:
+            if method == "max":
+                intensity = circular_region.max()
+            elif method == "sum":
+                intensity = circular_region.sum()
+            elif method == "percentile":
+                threshold = np.percentile(circular_region, percentile)
+                intensity = circular_region[circular_region > threshold].mean()
+            else:
+                intensity = circular_region.mean()
+        else:
+            intensity = 0
+        intensities.append(intensity)
+        mask_i_measure[mask_i] = True
+    return intensities, background, mask_i_measure
