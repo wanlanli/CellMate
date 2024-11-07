@@ -80,7 +80,7 @@ def animate_tracking_with_annotation(mask, annotation=False):
     return ani
 
 
-def animate_patch(intensity, *args, **kwargs):
+def animate_patch(intensity, properties=None, peaks=None, *args, **kwargs):
     """
     Create an animation of the image frames.
 
@@ -102,9 +102,28 @@ def animate_patch(intensity, *args, **kwargs):
     for i in range(intensity.shape[0]):
         im_i = []
         im = ax.plot(intensity[i], animated=True, *args, **kwargs)
-        title = ax.text(0.5, 1.05, f'Frame {i+1}', ha="center", va="baseline", 
+        im_i += [im[0]]
+        if properties is not None:
+            prop = properties[i]
+            x_min = prop["left_ips"]
+            x_max = prop["right_ips"]
+            y_i = prop["width_heights"]
+            switch = np.where(x_min > x_max)[0]
+            if len(switch) > 0:
+                y_i = np.concatenate([y_i, y_i[switch]])
+                x_min = np.concatenate([x_min, [0]*len(switch)])
+                x_max = np.concatenate([x_max, x_max[switch]])
+                x_max[switch] = [len(intensity[i])]*len(switch)
+            marker = ax.hlines(y=y_i, xmin=x_min, xmax=x_max, color="C1")
+            im_i += [marker]
+        if peaks is not None:
+            peak = peaks[i]
+            peak_im = ax.plot(peak, intensity[i][peak],  "*", markersize=20, label='Detected Peaks', color='red')
+            im_i += peak_im
+
+        title = ax.text(0.5, 1.05, f'Frame {i+1}', ha="center", va="baseline",
                         fontsize=12, transform=ax.transAxes, animated=True)
-        im_i += [im[0], title]
+        im_i += [title]
         ims.append(im_i)
     plt.close()
     ani = animation.ArtistAnimation(fig, ims, interval=50, blit=True, repeat_delay=1000)
