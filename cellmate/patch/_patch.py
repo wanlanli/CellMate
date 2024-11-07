@@ -16,17 +16,32 @@ from scipy.signal import savgol_filter, find_peaks
 
 
 class DynamicPatch():
-    def __init__(self, data, background, threshold=2, padding_length: int = 5):
+    def __init__(self, data, background, threshold=2):
+        """
+        Initialize the DynamicPatch object with data, background, threshold, and padding length.
+
+        Parameters:
+        - data: numpy array representing the signal data.
+        - background: numpy array representing the background levels to be subtracted from data.
+        - threshold: float, threshold value for normalization to highlight significant signals.
+        """
         self.data = data
         self.background = background
         self.threshold = threshold
-        self.padding_length = padding_length  # Make the signal periodic by padding it
         self.patch_length = 20
 
     @property
     def normalize(self):
+        """
+        Normalize the signal data based on the background and threshold.
+        - Subtract the background from each data point.
+        - Normalize by dividing by the median of positive values, highlighting significant signals.
+        - Subtract the threshold value to further isolate high signals.
+        - Clip values below zero to ensure only positive signals are retained.
+        Returns:
+        - data_norm: numpy array, the normalized data with only significant values.
+        """
         data_norm = (self.data - self.background[:, None])
-        # data_norm = data_norm.clip(0, None)
         data_norm = data_norm / np.median(data_norm[data_norm > 0])
         data_norm = data_norm - self.threshold
         data_norm = data_norm.clip(0, None)
@@ -34,11 +49,43 @@ class DynamicPatch():
 
     @property
     def binarized(self):
+        peaks, properties = self.activation()
         pass
 
     def instant_activation(self, time, *args, **kwargs):
+        """
+        Detects peaks in the normalized signal at a specific time step.
+
+        Parameters:
+        - time: int, the time step at which to analyze the signal for peaks.
+        - *args, **kwargs: additional arguments passed to the peak detection function.
+
+        Returns:
+        - peaks: list or array, indices of detected peaks in the signal.
+        - peaks_info: dict, additional information about each detected peak.
+        """
         peaks, peaks_info = detect_peaks(self.normalize[time], *args, **kwargs)
         return peaks, peaks_info
+
+    def activation(self):
+        """
+        Analyzes the signal across all time steps to detect peaks and gather their properties.
+
+        - Iterates through each time step in the data.
+        - For each time step, calls the `instant_activation` method to detect peaks.
+        - Collects and stores the detected peaks and their properties for each time step.
+
+        Returns:
+        - peaks: list of arrays, each array contains the indices of detected peaks at each time step.
+        - properties: list of dictionaries, each dictionary contains additional properties for the detected peaks at each time step.
+        """
+        properties = []
+        peaks = []
+        for i in range(0, self.data.shape[0]):
+            peak, property = self.instant_activation(time=i)
+            properties.append(property)
+            peaks.append(peak)
+        return peaks, properties
 
 
 def detect_peaks(signal, window_length=21, polyorder=5, prominence=0.4, width=3):
