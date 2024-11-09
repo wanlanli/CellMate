@@ -29,6 +29,8 @@ class DynamicPatch():
         self.background = background
         self.threshold = threshold
         self.patch_length = 20
+        self._peaks = None
+        self._properties = None
 
     @property
     def normalize(self):
@@ -50,7 +52,16 @@ class DynamicPatch():
     @property
     def binarized(self):
         peaks, properties = self.activation()
-        pass
+        binary_data = np.zeros(self.data.shape)
+        for i in range(0, binary_data.shape[0]):
+            peak = peaks[i]
+            property = properties[i]
+            for j in range(0, len(peak)):
+                x_min = property["left_ips"][j]
+                x_max = property["right_ips"][j]
+                y_i = property["width_heights"][j]
+                binary_data[i][int(x_min):int(x_max)] = y_i
+        return binary_data
 
     def instant_activation(self, time, *args, **kwargs):
         """
@@ -102,3 +113,10 @@ def detect_peaks(signal, window_length=21, polyorder=5, prominence=0.4, width=3)
     properties['right_ips'] = (properties['right_ips'] + non_zero_start) % len(signal)
 
     return peaks, properties
+
+
+def recurrent_index(start, end, maxlength):
+    if end < start:
+        end = end+maxlength
+    indices = np.arange(start, end) % maxlength  # end + 10 to cover the wrap-around
+    return indices
