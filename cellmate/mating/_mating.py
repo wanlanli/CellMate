@@ -184,8 +184,14 @@ class CellNetwork():
         measure = self.measure[time]
         return dict(zip(measure.labels % DIVISION, measure.labels))
 
-    def coord_overtime(self, cell_id):
-        pass
+    def bbox_overtime(self, cell_id):
+        bbox = []
+        frames = self.cells[cell_id].frames
+        for time in frames:
+            cell_label_t = self.label_map[time][cell_id]
+            bbox.append(self.measure[time].bbox(label=cell_label_t))
+        bbox = np.array(bbox)
+        return bbox
 
     def tips_overtime(self, cell_id):
         tips = []

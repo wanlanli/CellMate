@@ -15,7 +15,7 @@ class COLOR():
 black_pink_colors = ["black", "indigo", "magenta", "pink"]
 gaudi_colors = ['#f1a533', '#0f2ad4', '#4aa22e', '#f9de4b', '#3f8ef0', '#80ba38', '#f7f0dc', '#97c8e9', '#4faea7', '#87ebe9']
 mont_colors = ['#eeeeee', '#164487', '#fdd619', '#d72235', '#ea8902', '#a8c84a', '#716489', '#111111']
-
+patch_colors = ['#eeeeee', '#d72235', '#a8c84a', '#164487']
 
 default = mpl.colormaps['nipy_spectral']
 
@@ -25,6 +25,7 @@ COLORMAP = {
     'blackpink': COLOR(black_pink_colors),
     'gaudi': COLOR(gaudi_colors),
     'mont': COLOR(mont_colors),
+    'patch': COLOR(patch_colors),
 }
 
 
