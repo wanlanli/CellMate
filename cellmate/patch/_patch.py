@@ -13,7 +13,8 @@
 # limitations under the License.
 import numpy as np
 from scipy.signal import savgol_filter, find_peaks
-
+from sklearn.cluster import MeanShift
+import scipy.ndimage as ndimage
 
 class DynamicPatch():
     def __init__(self, data, background, threshold=2):
@@ -62,6 +63,20 @@ class DynamicPatch():
                 y_i = property["width_heights"][j]
                 binary_data[i][int(x_min):int(x_max)] = y_i
         return binary_data
+
+    def label(self, bandwidth=15):
+        index = np.where(self.binarized.sum(axis=0) == 0)[0][0]
+        rolled_map = np.roll(self.binarized, -index, 1)
+        labeled, num = ndimage.label(rolled_map > 0)
+        labeled_feature = []
+        for i in range(1, num+1):
+            data = labeled == i
+            coord_index = np.where(data.sum(axis=0))[0]
+            labeled_feature.append([coord_index.min(), coord_index.max(), coord_index.mean(), np.median(coord_index)])
+        cluster = MeanShift(bandwidth=bandwidth).fit(labeled_feature)
+        mapped_array_take = np.take([0]+list(cluster.labels_+1), labeled)
+        mapped_array_take = np.roll(mapped_array_take, index, 1)
+        return mapped_array_take
 
     def instant_activation(self, time, *args, **kwargs):
         """
