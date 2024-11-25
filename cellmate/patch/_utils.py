@@ -235,3 +235,25 @@ def intensity_multiple_points_debug(image, centers, radius, mask, method="mean",
         intensities.append(intensity)
         mask_i_measure[mask_i] = True
     return intensities, background, mask_i_measure
+
+
+# def get_patches_over_cells(cellnet, image):
+#     patch_data = {}
+#     for key in cellnet.cells.keys():
+#         cell_id = key
+#         data_overtime = []
+#         bg_overtime = []
+#         frames = cellnet.cells[cell_id].frames
+#         coords = cellnet.aligned_coords(cell_id)
+#         centers = cellnet.center_overtime(cell_id)
+#         for i, time in enumerate(frames):
+#             coord_t = coords[i]
+#             coord_t = move_to_center(coord_t, centers[i], dist=9)
+#             data, bg = intensity_multiple_points(image[time, 1], coord_t, 9, (image[time, -1] % 1000 == cell_id), method="mean", background_percentile=50)
+#             data_overtime.append(data)
+#             bg_overtime.append(bg)
+#         data_overtime = np.array(data_overtime)
+#         bg_overtime = np.array(bg_overtime)
+#         patch = DynamicPatch(data_overtime, bg_overtime)
+#         patch_data[cell_id] = patch
+#     return patch_data

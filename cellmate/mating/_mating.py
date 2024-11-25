@@ -222,6 +222,10 @@ class CellNetwork():
         print(coords.shape)
         return coords
 
+    # def nearest_point(self, cell_id1, cell_id2):
+    #     frames_1 = self.cells[cell_id1].frames
+    #     frames_2 = self.cells[cell_id2].frames
+    #     frames = list(set(frames_1).intersection(set(frames_2)))
 
 class CellNetwork90(CellNetwork):
     def __init__(self, image, time_network, tracker, threshold,  *args, **kwargs) -> None:

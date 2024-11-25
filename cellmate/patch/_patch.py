@@ -61,7 +61,12 @@ class DynamicPatch():
                 x_min = property["left_ips"][j]
                 x_max = property["right_ips"][j]
                 y_i = property["width_heights"][j]
-                binary_data[i][int(x_min):int(x_max)] = y_i
+                if x_min < x_max:
+                    binary_data[i][int(x_min):int(x_max)] = y_i
+                else:
+                    binary_data[i][int(x_min):] = y_i
+                    binary_data[i][:int(x_max)] = y_i
+
         return binary_data
 
     def label(self, bandwidth=15):
@@ -74,9 +79,17 @@ class DynamicPatch():
             coord_index = np.where(data.sum(axis=0))[0]
             labeled_feature.append([coord_index.min(), coord_index.max(), coord_index.mean(), np.median(coord_index)])
         cluster = MeanShift(bandwidth=bandwidth).fit(labeled_feature)
-        mapped_array_take = np.take([0]+list(cluster.labels_+1), labeled)
+
+        cluster.cluster_centers_  = (cluster.cluster_centers_ + index) % labeled.shape[1]
+        cluster.labels_  += 1
+
+        mapped_array_take = np.zeros_like(labeled)
+        # mapped_array_take = np.take([0]+list(cluster.labels_+1), labeled)
+        non_zero_mask = labeled > 0
+        mapped_array_take[non_zero_mask] = cluster.labels_[labeled[non_zero_mask] - 1]
         mapped_array_take = np.roll(mapped_array_take, index, 1)
-        return mapped_array_take
+        return mapped_array_take, cluster.cluster_centers_
+
 
     def instant_activation(self, time, *args, **kwargs):
         """
@@ -115,6 +128,20 @@ class DynamicPatch():
 
 
 def detect_peaks(signal, window_length=21, polyorder=5, prominence=0.4, width=3):
+    """
+    Detect peaks in a signal with optional smoothing.
+
+    Parameters:
+    - signal (array-like): Input 1D signal array.
+    - window_length (int): Length of the filter window (must be odd).
+    - polyorder (int): Polynomial order for Savitzky-Golay filter.
+    - prominence (float): Minimum prominence of peaks.
+    - width (float): Minimum width of peaks.
+
+    Returns:window_length
+    - peaks (ndarray): Indices of detected peaks in the original signal.
+    - properties (dict): Properties of detected peaks.
+    """
     non_zero_start = np.argmin(signal)  # Find first non-zero element
     signal_rolled = np.roll(signal, -non_zero_start)
     smoothed_signal_rolled = savgol_filter(signal_rolled, window_length=window_length, polyorder=polyorder)
