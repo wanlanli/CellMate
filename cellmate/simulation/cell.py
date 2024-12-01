@@ -17,9 +17,9 @@ import matplotlib.pyplot as plt
 from matplotlib import patches
 import random
 
-
+#
 class Cell:
-    def __init__(self, x, y, width, height, angle, id, cell_type):
+    def __init__(self, x, y, width, height, angle, id, cell_type, concentration_threshold=1):
         self.x = x  # Cell center x-coordinate
         self.y = y  # Cell center y-coordinate
         self.width = width  # Ellipse width
@@ -29,6 +29,8 @@ class Cell:
         self.cell_type = cell_type  # Cell type (1 or 2)
         self.dot_angle = random.choice([0, 180]) #self.angle  # Start dot at the rightmost tip of the ellipse
         self.sensed_inputs = []  # Inputs sensed by the dot
+        self.concentration_threshold = concentration_threshold
+        self.stopped = False
 
     def update_dot_position(self, field, resolution=100):
         """
@@ -39,6 +41,13 @@ class Cell:
             field (np.ndarray): The 2D concentration field.
             resolution (int): Number of points sampled along the cell's periphery.
         """
+        if self.concentration_threshold is not None:
+            cx, cy = self.get_dot_coordinates()
+            current_concentration = field[int(cx), int(cy)]
+            if current_concentration > self.concentration_threshold:
+                self.stopped = True
+                print("shmoo")
+                return
         angles = np.linspace(0, 360, resolution)
         best_concentration = -np.inf
         best_angle = None
