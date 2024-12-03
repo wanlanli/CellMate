@@ -19,7 +19,7 @@ import random
 
 #
 class Cell:
-    def __init__(self, x, y, width, height, angle, id, cell_type, concentration_threshold=1):
+    def __init__(self, x, y, width, height, angle, id, cell_type, concentration_threshold=0.1):
         self.x = x  # Cell center x-coordinate
         self.y = y  # Cell center y-coordinate
         self.width = width  # Ellipse width
@@ -27,7 +27,7 @@ class Cell:
         self.angle = angle
         self.id = id  # Cell ID
         self.cell_type = cell_type  # Cell type (1 or 2)
-        self.dot_angle = random.choice([0, 180]) #self.angle  # Start dot at the rightmost tip of the ellipse
+        self.dot_angle = random.choice([0, 180])  # self.angle  # Start dot at the rightmost tip of the ellipse
         self.sensed_inputs = []  # Inputs sensed by the dot
         self.concentration_threshold = concentration_threshold
         self.stopped = False
@@ -42,11 +42,12 @@ class Cell:
             resolution (int): Number of points sampled along the cell's periphery.
         """
         if self.concentration_threshold is not None:
-            cx, cy = self.get_dot_coordinates()
-            current_concentration = field[int(cx), int(cy)]
+            dox_x, dox_y = self.get_dot_coordinates()
+            current_concentration = field[int(dox_x), int(dox_y)]
+            # print(dox_x, dox_y, current_concentration)
             if current_concentration > self.concentration_threshold:
                 self.stopped = True
-                print("shmoo")
+                print(self.id, ": shmoo")
                 return
         angles = np.linspace(0, 360, resolution)
         best_concentration = -np.inf
@@ -75,11 +76,11 @@ class Cell:
         if best_concentration == -np.inf or np.all(detected_concentration == detected_concentration[0]):
             # Randomly switch between the two tips of the major axis
             self.dot_angle = random.choice([0, 180])  # 0 and 180 degrees represent the two tips
-            print(f"Cell {self.id} Random Inputs: {self.dot_angle}")
+            # print(f"Cell {self.id} Random Inputs: {self.dot_angle}")
         else:
             # Orient the dot to the angle with the highest concentration
             self.dot_angle = best_angle
-            print(f"Cell {self.id} Sensed Inputs: {self.dot_angle}, concentration = {best_concentration}")
+            # print(f"Cell {self.id} Sensed Inputs: {self.dot_angle}, concentration = {best_concentration}")
 
     def get_dot_coordinates(self):
         """Get the (x, y) position of the dot on the ellipse's periphery."""

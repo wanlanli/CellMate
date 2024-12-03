@@ -68,6 +68,7 @@ class DiffusionSimulator:
         Args:
             steps (int): Number of simulation steps.
         """
+        initial_total_concentration = np.sum(self.field)
         for step in range(steps):
             # Compute the Laplacian (∇²C)
             laplacian = (
@@ -84,13 +85,18 @@ class DiffusionSimulator:
             # Ensure no negative concentrations
             self.field = np.maximum(self.field, 0)
 
+                    # Normalize to conserve total concentration
+            total_concentration = np.sum(self.field)
+            if total_concentration > 0:
+                self.field *= initial_total_concentration / total_concentration
+
             # Plot the field at each step
             # self.plot_field(step)
 
     def plot_field(self, step):
         """
         Visualize the current state of the field as a heatmap.
-        
+
         Args:
             step (int): Current simulation step.
         """
