@@ -79,10 +79,18 @@ class HausdorffTrackedBox(TrackedBox):
 class IoUTrackedBox(TrackedBox):
     def __init__(self, idx, label, frame, feature=None, data=None, bbox=None):
         super().__init__(idx, label, frame, feature, data)
-        self.bbox = bbox
+        self.bbox = [bbox]
+
+    def update(self, label, frame, bbox=None):
+        """
+        Updates the state vector with observed bbox.
+        """
+        self.label.append(label)
+        self.frame.append(frame)
+        self.bbox.append(bbox)
 
     def predict(self):
-        return [self.label[-1], self.frame[-1], self.bbox]
+        return [self.label[-1], self.frame[-1], self.bbox[-1]]
 
 
 class KalmanTrackedBox(TrackedBox):

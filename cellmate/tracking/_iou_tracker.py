@@ -165,7 +165,7 @@ class Tracker(BaseTracker):
         unmatched_trks = match_dict[1]
         for m in matched_pairs:
             matched_inst = instances[m[1]]
-            self.trackers[m[0]].update(matched_inst[0], matched_inst[1])
+            self.trackers[m[0]].update(matched_inst[0], matched_inst[1], matched_inst[2])
             node = self.trackers[m[0]].id
             if self.network.has_node(node):
                 upstream = self.network.upstream(node)  # [n for n in nx.traversal.bfs_tree(self.network, node, reverse=True) if n != node]
