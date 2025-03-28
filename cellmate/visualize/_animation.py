@@ -36,7 +36,7 @@ def animate_images(image, *args, **kwargs):
     return ani
 
 
-def animate_tracking_with_annotation(mask, annotation=False):
+def animate_tracking_with_annotation(mask, annotation=False, cmap=None):
     """
     Create an animation of the image frames.
 
@@ -54,7 +54,7 @@ def animate_tracking_with_annotation(mask, annotation=False):
         The created animation object.
     """
     from ._utils import label2rgb
-    image = label2rgb(mask)
+    image = label2rgb(mask, colormap=cmap)
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.set_xticks([])
     ax.set_yticks([])
