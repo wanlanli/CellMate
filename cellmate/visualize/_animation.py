@@ -3,6 +3,11 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 
+def overlay_image(image, mask, alpha=0.5):
+    """Blend the image and mask with transparency."""
+    return ((1 - alpha) * image[:, :, None] + alpha * mask).astype(np.uint8)
+
+
 def animate_images(image, *args, **kwargs):
     """
     Create an animation of the image frames.
