@@ -104,7 +104,10 @@ def background(fluorescent_image, masks, threshold: float = 10) -> np.array:
     bg_threshold: np.array with shape [frame x number of channels]
         An array containing background thresholds for each frame and channel.
     """
-    masked = fluorescent_image*((masks == 0)[:, None, :, :])
+    if fluorescent_image.ndim == 3:
+        masked = fluorescent_image*((masks == 0)[:, :, None])
+    else:
+        masked = fluorescent_image*((masks == 0)[:, None, :, :])
     channel_number = fluorescent_image.shape[1]
     bg_threshold = np.zeros((fluorescent_image.shape[0],  channel_number))
     for i in range(0, channel_number):
