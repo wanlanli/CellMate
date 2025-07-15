@@ -34,7 +34,7 @@ class BaseTracker():
     def tracker_features_exist(self):
         pass
 
-    def to_image(self):
+    def to_image(self, is_keep_middle=False):
         """
         Save the tracked result into an image, where the new pixel values represent tracked information.
         The object ID in the tracked image is calculated as self.idx + tracker.category() * 1000.
@@ -55,8 +55,11 @@ class BaseTracker():
         for i in range(len(tracker)):
             if tracker[i].life_time() < self.min_hist:
                 continue
-            if (~tracker[i].end) & (tracker[i].last_update() < self.image.shape[0]-1):
-                continue
+
+            if not is_keep_middle:
+                if (~tracker[i].end) & (tracker[i].last_update() < self.image.shape[0]-1):
+                    continue
+
             frame = tracker[i].frame
             label = np.array(tracker[i].label, dtype=np.int_).reshape([-1, 1, 1])
             class_id = tracker[i].category()
