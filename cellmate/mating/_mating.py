@@ -44,14 +44,24 @@ class CellNetwork():
 
                 last_labels = set(labels)
 
-        for c in tracker:
-            if time_network.has_node(c.id):
-                gen_feature = time_network.feature(c.id)
+        # for c in tracker:
+        #     if time_network.has_node(c.id):
+        #         gen_feature = time_network.feature(c.id)
+        #     else:
+        #         gen_feature = [0, None, None, [], [], None, None]
+        #     frames = np.array(c.frame)
+        #     frames = frames[frames < self.frame_number]
+        #     self.cells[c.id] = Cell(id=c.id, frames=frames, generation_tree=gen_feature)
+
+        for c in tracker.keys():
+            if time_network.has_node(c):
+                gen_feature = time_network.feature(c)
             else:
                 gen_feature = [0, None, None, [], [], None, None]
-            frames = np.array(c.frame)
+            frames = np.array(tracker[c]['frame'])
             frames = frames[frames < self.frame_number]
-            self.cells[c.id] = Cell(id=c.id, frames=frames, generation_tree=gen_feature)
+            label = tracker[c]['label']
+            self.cells[c] = Cell(id=c, label=label, frames=frames, generation_tree=gen_feature)
 
         self.label_map = []
         for t in range(0, self.image.shape[0]):

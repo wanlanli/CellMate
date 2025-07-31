@@ -82,3 +82,21 @@ class BaseTracker():
 
     def update_division(self):
         pass
+
+    def save_trackers(self, is_keep_middle=False):
+        tracker = self.tracker_end + self.trackers
+        if len(tracker) < 1:
+            return None
+        tracker_saved = {}
+        for i in range(len(tracker)):
+            if tracker[i].life_time() < self.min_hist:
+                continue
+
+            if not is_keep_middle:
+                if (~tracker[i].end) & (tracker[i].last_update() < self.image.shape[0]-1):
+                    continue
+            class_id = tracker[i].category()
+            label = tracker[i].id + class_id*DIVISION
+            tracker_saved[tracker[i].id] = {"label": label,
+                                            "frame": tracker[i].frame}
+        return tracker_saved

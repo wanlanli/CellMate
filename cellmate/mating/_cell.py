@@ -14,11 +14,13 @@ class Cell(object):
     """
     def __init__(self,
                  id,
+                 label=None,
                  frames=[],
                  generation_tree=[0, None, None, [], [], None, None],):
         # ID
         self.id = id
         self.frames = frames
+        self.label = label
         #  self._features = features
         self._generation_tree = generation_tree
         # generation tree
