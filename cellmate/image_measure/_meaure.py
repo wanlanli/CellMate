@@ -194,8 +194,8 @@ class ImageMeasure():
 
     @property
     def bboxes(self):
-        colum = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.BOUNDING_BOX_LIST]
-        return self._properties[:, colum]
+        column = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.BOUNDING_BOX_LIST]
+        return self._properties[:, column]
 
     def bbox(self, index=None, label=None):
         index = self.__index(index, label)

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-from sklearn.mixture import GaussianMixture
+# from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans
 
 
 class FluorescentClassification():
@@ -46,23 +47,36 @@ class FluorescentClassification():
 
     def normalize_intensity(self):
         for i in range(0, self.channel_number):
-            self.data['ch%d_norm' % i] = (np.log(self.data['ch_%d' % i])-np.log(self.data['bg_%d' %i ]))/np.log(self.data['bg_%d' %i ])
+            # self.data['ch%d_norm' % i] = (np.log(self.data['ch_%d' % i])-np.log(self.data['bg_%d' %i ]))/np.log(self.data['bg_%d' %i ])
+            x = self.data['ch_%d' % i] - self.data['bg_%d' % i]
+            x[x <= 0] = 1e-6
+            x = np.log(x)/np.log(self.data['bg_%d' % i])
+            x[x <= 1] = 1
+            # x
+            self.data['ch_%d_norm' % i] = x #np.log(x)/np.log(self.data['bg_%d' % i])
         return self.data
 
-    def prediction_data_type(self, **args):
+    def prediction_data_type(self):
         self.data = self.normalize_intensity()
         self.data = self.data.dropna()
-        data = self.data[['ch%d_norm' % i for i in range(0, self.channel_number)]]
-        clustering = GaussianMixture(**args).fit(data)
-        data_pred = clustering.predict(data)
-        class_map = rename_classes(data, clustering.means_)
-        data_pred = [class_map[x] for x in data_pred]
-        self.model = clustering
-        self.data["channel_prediction"] = data_pred
-        return data_pred, clustering
+        # data = self.data[['ch%d_norm' % i for i in range(0, self.channel_number)]]
+        # clustering = GaussianMixture(**args).fit(data)
+        # data_pred = clustering.predict(data)
+        # class_map = rename_classes(data, clustering.means_)
+        # data_pred = [class_map[x] for x in data_pred]
+        # self.model = clustering
+        # self.data["channel_prediction"] = data_pred
+        # return data_pred, clustering
+        label_chs = 0
+        for i in range(0, self.channel_number):
+            label_i = single_channel_prediction(self.data['ch_%d_norm' % i])
+            self.data["ch_%d_prediction" % i] = label_i
+            label_chs += label_i*2**i
+        self.data["channel_prediction"] = label_chs
+        return self.data
 
-    def prediction_by_label(self, **args):
-        _, _ = self.prediction_data_type(**args)
+    def prediction_by_label(self):
+        _ = self.prediction_data_type()
         pred = self.data.groupby('label')['channel_prediction'].agg(pd.Series.mode)
         return pred
 
@@ -161,9 +175,21 @@ def flatten_nonzero_value(data):
     return flatten
 
 
-def prediction_cell_type(fluorescent_image, masks, channel_number=2, bg_threshold=10, fc_threshold=50, n_components=2):
+def prediction_cell_type(fluorescent_image, masks, channel_number=2, bg_threshold=10, fc_threshold=50):
     bg = background(fluorescent_image, masks, threshold=bg_threshold)
     data = instance_fluorescent_intensity(fluorescent_image, masks, bg, measure_line=fc_threshold)
     fc = FluorescentClassification(data, channel_number=channel_number)
-    cell_types = fc.prediction_by_label(n_components=n_components)
+    cell_types = fc.prediction_by_label()
     return cell_types, fc.data
+
+
+def single_channel_prediction(X, high_val=0.8):
+    # Example data: rows are samples, columns are features
+    # X = np.array(np.log(a.ch_0 - a.bg_0) / np.log(a.bg_0))
+    X = np.array(X)
+    X = X.reshape((X.shape[0], 1))
+
+    init_centroids = np.array([[np.min(X)], [high_val]])  # e.g., [low_val], [high_val]
+    kmeans = KMeans(n_clusters=2, init=init_centroids, n_init=1)
+    labels = kmeans.fit_predict(X)
+    return labels
