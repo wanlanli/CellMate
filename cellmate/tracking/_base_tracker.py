@@ -4,6 +4,7 @@ import numpy as np
 
 from ..network._network import NetCell
 from ..configs import DIVISION
+from ._distance import compute_mask_iou
 
 
 class BaseTracker():
@@ -100,3 +101,43 @@ class BaseTracker():
             tracker_saved[tracker[i].id] = {"label": label,
                                             "frame": tracker[i].frame}
         return tracker_saved
+
+    def to_image_auto_fill_miss(self, is_keep_middle=False):
+        traced_image = self.to_image()
+        traced_image_filled = traced_image.copy()
+        tracker = self.tracker_end + self.trackers
+        if len(tracker) < 1:
+            return None
+        for i in range(len(tracker)):
+            if tracker[i].life_time() < self.min_hist:
+                continue
+
+            if not is_keep_middle:
+                if (~tracker[i].end) & (tracker[i].last_update() < self.image.shape[0]-1):
+                    continue
+
+            class_id = tracker[i].category()
+            new_label = tracker[i].id + class_id*DIVISION
+
+            frame = tracker[i].frame
+            missed_frame = []
+            for j in range(0, len(frame)-1):
+                if frame[j+1] - frame[j] > 1:
+                    missed_frame.append([frame[j], frame[j+1]])
+
+            if len(missed_frame) <= 0:
+                continue
+
+            for k in range(0, len(missed_frame)):
+                start = missed_frame[k][0]
+                end = missed_frame[k][1]
+
+                mask_start = traced_image[start] == new_label
+                mask_end = traced_image[end] == new_label
+                iou, _, _ = compute_mask_iou(mask_start, mask_end)
+                if iou > 0.9:
+                    overlap_mask = mask_start & mask_end
+                    for m_f in range(start, end):
+                        if traced_image_filled[m_f][overlap_mask].sum() < 1000:
+                            traced_image_filled[m_f][overlap_mask] = new_label
+        return traced_image, traced_image_filled
