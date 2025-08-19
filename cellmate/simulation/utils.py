@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 from matplotlib import patches
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.animation as animation
+import numpy as np
+import math
 
 
 red_cmap = LinearSegmentedColormap.from_list("red_cmap", [(1, 1, 1, 0), (1, 0, 0, 1)])  # White to red
@@ -92,3 +94,68 @@ class simulation_animation():
         )
         plt.close(fig)
         return ani
+
+
+def angle_transfer(angle):
+    angle = angle % 360
+    if (angle > 90) & (angle <= 180):
+        angle = 180 - angle
+    if (angle > 180) & (angle <= 270):
+        angle = angle - 180
+    if angle > 270:
+        angle = 360 - angle
+    return angle
+
+
+def distance(point1, point2):
+    x1, y1 = point1
+    x2, y2 = point2
+    return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+
+def generate_random_ellipse_params(num_ellipses=4, max_attempts=100):
+    ellipses = []
+    attempts = 0
+
+    while len(ellipses) < num_ellipses and attempts < max_attempts:
+        # Generate random parameters
+        center_x = np.random.uniform(20, 80)
+        center_y = np.random.uniform(20, 80)
+        major_axis = np.random.uniform(10, 25)
+        minor_axis = np.random.uniform(5, major_axis-1)
+        angle = np.random.uniform(0, 360)
+
+        # Create a new ellipse
+        new_ellipse = {
+            'center_x': center_x,
+            'center_y': center_y,
+            'major_axis': major_axis,
+            'minor_axis': minor_axis,
+            'angle': angle
+        }
+
+        # Check if it overlaps with existing ellipses
+        overlap = False
+        for e in ellipses:
+            if check_overlap(new_ellipse, e):
+                overlap = True
+                break
+
+        if not overlap:
+            ellipses.append(new_ellipse)
+        attempts += 1
+
+    if len(ellipses) < num_ellipses:
+        print("Could not generate enough non-overlapping ellipses.")
+    return ellipses
+
+
+def check_overlap(e1, e2):
+    """Check if two ellipses overlap using approximate bounding box logic."""
+    dx = e1['center_x'] - e2['center_x']
+    dy = e1['center_y'] - e2['center_y']
+    distance = np.sqrt(dx**2 + dy**2)
+
+    # Calculate the maximum possible radii sum (rough approximation)
+    max_radii_sum = max(e1['major_axis'], e1['minor_axis']) + max(e2['major_axis'], e2['minor_axis'])
+    return distance < max_radii_sum

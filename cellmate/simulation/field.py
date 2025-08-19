@@ -19,7 +19,7 @@ class DiffusionSimulator:
     def __init__(self, size, D, dx=1.0, dt=0.1):
         """
         Initialize the diffusion simulator.
-        
+
         Args:
             size (int): Size of the field (size x size).
             D (float): Diffusion coefficient.
@@ -47,7 +47,7 @@ class DiffusionSimulator:
     def add_elements(self, positions, concentration):
         """
         Add new elements into the field at specified positions with given concentration.
-        
+
         Args:
             positions (list of tuples): List of (x, y) positions to add new elements.
             concentration (float): Concentration value to add at each position.
