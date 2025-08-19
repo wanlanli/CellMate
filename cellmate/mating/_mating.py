@@ -237,6 +237,7 @@ class CellNetwork():
     #     frames_2 = self.cells[cell_id2].frames
     #     frames = list(set(frames_1).intersection(set(frames_2)))
 
+
 class CellNetwork90(CellNetwork):
     def __init__(self, image, time_network, tracker, threshold,  *args, **kwargs) -> None:
         super().__init__(image, time_network, tracker, threshold,  *args, **kwargs)

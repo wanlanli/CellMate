@@ -137,7 +137,11 @@ class BaseTracker():
                 iou, _, _ = compute_mask_iou(mask_start, mask_end)
                 if iou > 0.9:
                     overlap_mask = mask_start & mask_end
-                    for m_f in range(start, end):
+                    for m_f in range(start+1, end):
                         if traced_image_filled[m_f][overlap_mask].sum() < 1000:
                             traced_image_filled[m_f][overlap_mask] = new_label
+                        else:
+                            print(new_label, m_f, "area > 1000")
+                else:
+                    print(new_label, m_f, "overlap < 0.9", iou)
         return traced_image, traced_image_filled
