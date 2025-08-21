@@ -143,5 +143,5 @@ class BaseTracker():
                         else:
                             print(new_label, start, "area > 1000")
                 else:
-                    print(new_label, m_f, "overlap < 0.9", iou)
+                    print(new_label, start, "overlap < 0.9", iou)
         return traced_image, traced_image_filled
