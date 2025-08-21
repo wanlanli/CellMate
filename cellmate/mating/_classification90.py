@@ -81,6 +81,7 @@ def intensity_h90_diff_local_single(fluorescent_image, mask, erosion_k=10, thres
     nc_flag = nc_mask[row, col]
 
     mask_edge = ~closed_image & mask
+
     edge_list = fluorescent_image[mask_edge]
     edge_intensity = np.mean(edge_list[edge_list > np.percentile(edge_list, 70)])
 
