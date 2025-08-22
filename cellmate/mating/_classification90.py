@@ -1,6 +1,8 @@
 import numpy as np
 from skimage import morphology
 import scipy.ndimage as ndi
+import pandas as pd
+from tqdm import trange
 
 
 def fluorescent_intensity_h90_single(fluorescent_image, mask, erosion_k=13, dilation_k=1, conv_k=17):
@@ -58,15 +60,24 @@ def post_process(image, selem=morphology.disk(3), area_threshold=100, erosion_fa
     return img_rm_small
 
 
-def intensity_h90_diff_local_single(fluorescent_image, mask, erosion_k=10, threshold=90):
+def intensity_h90_diff_local_single(fluorescent_image, mask, erosion_k=11, threshold=88):
     closed_image = morphology.binary_erosion(mask, footprint=morphology.disk(erosion_k))
     kernel = np.array([[0, 0, 1, 0, 0],
                       [0, 1, 2, 1, 0],
                       [1, 2, 4, 2, 1],
                       [0, 1, 2, 1, 0],
                       [0, 0, 1, 0, 0]])
-
-    response = ndi.convolve((closed_image * fluorescent_image.astype(np.float_)), kernel, mode='constant', cval=0)
+    kernel=np.array([[0, 0, 0, 0, 1, 0, 0, 0, 0],
+                     [0, 0, 0, 1, 2, 1, 0, 0, 0],
+                     [0, 0, 1, 2, 4, 2, 1, 0, 0],
+                     [0, 1, 2, 4, 8, 4, 2, 1, 0],
+                     [1, 2, 4, 8, 16, 8, 4, 2, 1],
+                     [0, 1, 2, 4, 8, 4, 2, 1, 0],
+                     [0, 0, 1, 4, 4, 4, 1, 0, 0],
+                     [0, 0, 0, 1, 2, 1, 0, 0, 0],
+                     [0, 0, 0, 0, 1, 0, 0, 0, 0],])
+    response = ndi.convolve((fluorescent_image.astype(np.float_)), kernel, mode='constant', cval=0)
+    response[~closed_image] = 0
     # response = convolve2d(closed_image*f_cropped, kernel, mode='same')
 
     idx = np.argmax(response)
@@ -113,4 +124,16 @@ def instance_fluorescent_intensity_h90(fluorescent_image, masks, *args, **kwargs
         nc_flag, core_intensity, edge_intensity, cy_intensity = intensity_h90_diff_local_single(f_cropped, mask, *args, **kwargs)
         data = [label, nc_flag, core_intensity, edge_intensity, cy_intensity, bg_intensity]
         data_sheet.append(data)
+    return data_sheet
+
+
+def get_intensity_table(fluorescent_image, tracked_image, *args, **kwargs):
+    data_sheet = None
+    for frame_number in trange(0, tracked_image.shape[0]):
+        data = instance_fluorescent_intensity_h90(fluorescent_image[frame_number],
+                                                  tracked_image[frame_number],
+                                                  *args, **kwargs)
+        data = pd.DataFrame(data, columns=["label", "nc_flag", "nuclear", "membrane", "cytoplasmic", "background"])
+        data["frame"] = frame_number
+        data_sheet = pd.concat([data_sheet, data])
     return data_sheet
