@@ -60,33 +60,35 @@ def post_process(image, selem=morphology.disk(3), area_threshold=100, erosion_fa
     return img_rm_small
 
 
-def intensity_h90_diff_local_single(fluorescent_image, mask, erosion_k=11, threshold=88):
+def intensity_h90_diff_local_single(fluorescent_image, mask, kernel, erosion_k=11, threshold=80, ):
     closed_image = morphology.binary_erosion(mask, footprint=morphology.disk(erosion_k))
-    kernel = np.array([[0, 0, 1, 0, 0],
-                      [0, 1, 2, 1, 0],
-                      [1, 2, 4, 2, 1],
-                      [0, 1, 2, 1, 0],
-                      [0, 0, 1, 0, 0]])
-    kernel=np.array([[0, 0, 0, 0, 1, 0, 0, 0, 0],
-                     [0, 0, 0, 1, 2, 1, 0, 0, 0],
-                     [0, 0, 1, 2, 4, 2, 1, 0, 0],
-                     [0, 1, 2, 4, 8, 4, 2, 1, 0],
-                     [1, 2, 4, 8, 16, 8, 4, 2, 1],
-                     [0, 1, 2, 4, 8, 4, 2, 1, 0],
-                     [0, 0, 1, 4, 4, 4, 1, 0, 0],
-                     [0, 0, 0, 1, 2, 1, 0, 0, 0],
-                     [0, 0, 0, 0, 1, 0, 0, 0, 0],])
+    # kernel = np.array([[0, 0, 1, 0, 0],
+    #                   [0, 1, 2, 1, 0],
+    #                   [1, 2, 4, 2, 1],
+    #                   [0, 1, 2, 1, 0],
+    #                   [0, 0, 1, 0, 0]])
+    # kernel=np.array([[0, 0, 0, 0, 1, 0, 0, 0, 0],
+    #                  [0, 0, 0, 1, 2, 1, 0, 0, 0],
+    #                  [0, 0, 1, 2, 4, 2, 1, 0, 0],
+    #                  [0, 1, 2, 4, 8, 4, 2, 1, 0],
+    #                  [1, 2, 4, 8, 16, 8, 4, 2, 1],
+    #                  [0, 1, 2, 4, 8, 4, 2, 1, 0],
+    #                  [0, 0, 1, 4, 4, 4, 1, 0, 0],
+    #                  [0, 0, 0, 1, 2, 1, 0, 0, 0],
+    #                  [0, 0, 0, 0, 1, 0, 0, 0, 0],])
     response = ndi.convolve((fluorescent_image.astype(np.float_)), kernel, mode='constant', cval=0)
     response[~closed_image] = 0
     # response = convolve2d(closed_image*f_cropped, kernel, mode='same')
 
     idx = np.argmax(response)
     row, col = np.unravel_index(idx, response.shape)
-    thresh = np.percentile(response[response > 0], threshold)
 
+    response_list = response[response > 0]
+    thresh = 0
+    if len(response_list > 0):
+        thresh = np.percentile(response_list, threshold)
     # Generate binary image by threshold
     binary = response > thresh
-
     nc_mask = post_process(binary, area_threshold=200)
 
     nc_flag = nc_mask[row, col]
@@ -98,6 +100,16 @@ def intensity_h90_diff_local_single(fluorescent_image, mask, erosion_k=11, thres
 
     if nc_flag:
         core_intensity = np.mean(fluorescent_image[nc_mask])
+    else:
+        core_intensity = 0
+
+    if (core_intensity > edge_intensity*1.05) & nc_flag:
+        nc_flag = True
+    else:
+        nc_flag = False
+
+    if nc_flag:
+        # core_intensity = np.mean(fluorescent_image[nc_mask])
         cy_intensity = np.mean(fluorescent_image[~nc_mask & closed_image])
     else:
         core_intensity = 0
@@ -107,7 +119,7 @@ def intensity_h90_diff_local_single(fluorescent_image, mask, erosion_k=11, thres
     return nc_flag, core_intensity, edge_intensity, cy_intensity
 
 
-def instance_fluorescent_intensity_h90(fluorescent_image, masks, *args, **kwargs):
+def instance_fluorescent_intensity_h90(fluorescent_image, masks, kernel, *args, **kwargs):
     data_sheet = []
     label_list = np.unique(masks)[1:]
     bg_intensity = np.mean(fluorescent_image[masks == 0])
@@ -121,19 +133,34 @@ def instance_fluorescent_intensity_h90(fluorescent_image, masks, *args, **kwargs
 
         mask = mask[x_min:x_max, y_min:y_max]
         f_cropped = fluorescent_image[x_min:x_max, y_min:y_max]
-        nc_flag, core_intensity, edge_intensity, cy_intensity = intensity_h90_diff_local_single(f_cropped, mask, *args, **kwargs)
+        nc_flag, core_intensity, edge_intensity, cy_intensity = intensity_h90_diff_local_single(f_cropped, mask, kernel, *args, **kwargs)
         data = [label, nc_flag, core_intensity, edge_intensity, cy_intensity, bg_intensity]
         data_sheet.append(data)
     return data_sheet
 
 
-def get_intensity_table(fluorescent_image, tracked_image, *args, **kwargs):
+def get_intensity_table(fluorescent_image, tracked_image, kernel=None, *args, **kwargs):
     data_sheet = None
+    if kernel is None:
+        kernel = dot_detector_kernel(radius=19)
     for frame_number in trange(0, tracked_image.shape[0]):
         data = instance_fluorescent_intensity_h90(fluorescent_image[frame_number],
                                                   tracked_image[frame_number],
+                                                  kernel,
                                                   *args, **kwargs)
         data = pd.DataFrame(data, columns=["label", "nc_flag", "nuclear", "membrane", "cytoplasmic", "background"])
         data["frame"] = frame_number
         data_sheet = pd.concat([data_sheet, data])
     return data_sheet
+
+
+def dot_detector_kernel(radius=10):
+    """Kernel to detect bright round dots of given radius"""
+    # size = radius*2 + 1
+    # circular mask for the dot
+    mask = morphology.disk(radius).astype(float)
+    # normalize: positive inside, negative outside
+    kernel = mask - mask.mean()
+    # normalize to unit L1 norm (optional)
+    kernel /= np.sum(np.abs(kernel))
+    return kernel
