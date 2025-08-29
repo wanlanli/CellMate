@@ -81,7 +81,7 @@ class ImageMeasure():
         if isinstance(label, int):
             return self.__hash_obj.get(label)
         else:
-            return [self.__hash_obj.get(k) for k in label if self.__hash_obj.get(k)]
+            return [self.__hash_obj.get(k) for k in label if self.__hash_obj.get(k) is not None]
 
     # set properties
     def _init_instance_properties(self):
