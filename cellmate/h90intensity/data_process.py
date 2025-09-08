@@ -168,7 +168,7 @@ def get_intensity_table(fluorescent_image, tracked_image, kernel=None, *args, **
 
 def smooth_normalize(data_sheet):
     data_sheet["norm_nuclear"] = (data_sheet["nuclear"] - data_sheet["background"]).clip(lower=0)#/ merged_data_test["background"]
-    data_sheet["norm_membrane"] = (data_sheet["membrane"] - data_sheet["background"]).clip(lower=0) #/ merged_data_test["background"]
+    data_sheet["norm_membrane"] = (data_sheet["membrane"] - data_sheet["background"] - 50).clip(lower=0) #/ merged_data_test["background"]
     data_sheet["norm_cytoplasmic"] = (data_sheet["cytoplasmic"] - data_sheet["background"]).clip(lower=0) #/ merged_data_test["background"]
 
     all_label = data_sheet.label.unique()
@@ -177,9 +177,9 @@ def smooth_normalize(data_sheet):
         current_mask = data_sheet.label==current_label
         data_i = data_sheet[current_mask]
 
-        data_sheet.loc[current_mask, "norm_nuclear"] = gaussian_filter1d(data_i["norm_nuclear"], sigma=1, mode="nearest")
-        data_sheet.loc[current_mask, "norm_membrane"] = gaussian_filter1d(data_i["norm_membrane"], sigma=1, mode="nearest")
-        data_sheet.loc[current_mask, "norm_cytoplasmic"] = gaussian_filter1d(data_i["norm_cytoplasmic"], sigma=1, mode="nearest")
+        data_sheet.loc[current_mask, "norm_nuclear"] = gaussian_filter1d(data_i["norm_nuclear"], sigma=2, mode="nearest")
+        data_sheet.loc[current_mask, "norm_membrane"] = gaussian_filter1d(data_i["norm_membrane"], sigma=2, mode="nearest")
+        data_sheet.loc[current_mask, "norm_cytoplasmic"] = gaussian_filter1d(data_i["norm_cytoplasmic"], sigma=2, mode="nearest")
 
     filter_mask = data_sheet["norm_nuclear"] < (data_sheet["norm_cytoplasmic"]*1.5)
     data_sheet.loc[filter_mask, "norm_nuclear"] = 0
@@ -190,11 +190,11 @@ def smooth_normalize(data_sheet):
         current_mask = data_sheet.label==current_label
         data_i = data_sheet[current_mask]
 
-        smoothed = data_i.norm_nuclear.rolling(window=20, center=True, min_periods=5).mean()
+        smoothed = data_i.norm_nuclear.rolling(window=5, center=True, min_periods=5).mean()
         smoothed_diff = smoothed.diff()
         slope_nc = smoothed_diff[smoothed_diff > 0].sum()
 
-        smoothed = data_i.norm_membrane.rolling(window=20, center=True, min_periods=5).mean()
+        smoothed = data_i.norm_membrane.rolling(window=5, center=True, min_periods=5).mean()
         smoothed_diff = smoothed.diff()
         slope_mb = smoothed_diff[smoothed_diff > 0].sum()
 
