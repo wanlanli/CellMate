@@ -58,7 +58,7 @@ def dot_detector_kernel(radius=10):
     return kernel
 
 
-def post_process(image, selem=morphology.disk(3), area_threshold=150, erosion_factor=2):
+def post_process(image, selem=morphology.disk(2), area_threshold=150):
     """
     Apply morphological post-processing to clean up a binary image.
 
