@@ -11,20 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from typing import Tuple, Optional, Any
 
-# Copyright 2025 wlli
-# 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-# 
-#     https://www.apache.org/licenses/LICENSE-2.0
-# 
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+
 import numpy as np
 import pandas as pd
 
@@ -33,62 +22,51 @@ from scipy.signal import convolve2d
 from skimage.morphology import disk, remove_small_objects, opening, closing, erosion
 
 
-def __mean_max_min(data):
-    return np.mean(data), np.max(data), np.min(data)
-
-
-def __cropped_index(data):
-    x_index, y_index = np.where(data)
-    x_min = x_index.min()
-    x_max = x_index.max()
-    y_min = y_index.min()
-    y_max = y_index.max()
-    return x_min, x_max, y_min, y_max
-
-
-def dPSTR_image_measure2table(florescent_image, mask, nucleus_label, *args, **kwargs):
+def dPSTR_image_measure2table(fluorescent_image: np.ndarray,
+                              mask: np.ndarray,
+                              nucleus_label: np.ndarray,
+                              *args: Any,
+                              **kwargs: Any) -> Tuple[pd.DataFrame, np.ndarray]:
     """
-    Measure dPSTR fluorescence intensity statistics for cytoplasm and nucleus regions of each cell.
+    Measure dPSTR fluorescence intensity statistics for cytoplasm and nucleus
+    regions of each labeled cell in an image.
 
-    This function:
-    - Iterates through each labeled cell in the mask.
-    - Detects the nucleus within the cell using a refined segmentation.
-    - Separates nucleus and cytoplasm regions.
-    - Computes mean, max, and min fluorescence values for each region.
-    - Computes background statistics for comparison.
-
-    Parameters:
-    -----------
-    florescent_image : np.ndarray
-        2D array representing the fluorescence intensity (dPSTR signal) of the image.
-
-    mask : np.ndarray
-        2D array with the same shape as `florescent_image`, where each cell has a unique non-zero label.
-        Background is labeled as 0.
-
-    nucleus_label : np.ndarray
-        2D array (binary or labeled) identifying potential nucleus regions.
-
-    *args, **kwargs :
-        Passed to `single_cell_nucleus_detect` for customizing detection, such as kernel, percentile, etc.
-
-    Returns:
+    Workflow
     --------
+    - Iterate through each labeled cell in the mask.
+    - Detect the nucleus within each cell (refined segmentation).
+    - Separate nucleus and cytoplasm regions.
+    - Compute mean, max, and min fluorescence values for each region.
+
+    Parameters
+    ----------
+    fluorescent_image : np.ndarray
+        2D array of fluorescence intensity values (dPSTR signal).
+    mask : np.ndarray
+        2D labeled array (same shape as `fluorescent_image`), where each cell
+        has a unique non-zero label. Background is labeled as 0.
+    nucleus_label : np.ndarray
+        2D array indicating potential nucleus regions.
+    *args, **kwargs :
+        Additional arguments forwarded to `detect_single_cell_nucleus`
+        (e.g., kernel, percentile, selem, area_threshold, erosion_factor).
+
+    Returns
+    -------
     table : pd.DataFrame
-        DataFrame where each row corresponds to a cell label, and columns include:
+        DataFrame where each row corresponds to a cell label, with columns:
         - cytoplasm_mean, cytoplasm_max, cytoplasm_min
         - nucleus_mean, nucleus_max, nucleus_min
-        - whole_mean, whole_max, whole_min (entire cell region)
-        - background (mean background fluorescence)
-
+        - whole_mean, whole_max, whole_min
+        - background
     detected_nc : np.ndarray
-        Labeled binary image with detected nucleus regions, used for visualization/debugging.
+        Labeled binary image with detected nucleus regions, for visualization
+        or debugging.
     """
-    # Get all unique labels (excluding background 0)
+    # --- Initialize ---
     labels = np.unique(mask)
     labels = labels[labels != 0]
 
-    # Initialize results table
     table = pd.DataFrame(columns=[
         "cytoplasm_mean", "cytoplasm_max", "cytoplasm_min",
         "nucleus_mean", "nucleus_max", "nucleus_min",
@@ -96,39 +74,40 @@ def dPSTR_image_measure2table(florescent_image, mask, nucleus_label, *args, **kw
         "background"
     ])
 
-    # Measure background fluorescence in regions where mask == 0
-    bg_mean, bg_max, bg_min = __mean_max_min(florescent_image[mask == 0])
+    # Background fluorescence statistics
+    bg_mean, bg_max, bg_min = __calculate_basic_stats(fluorescent_image[mask == 0])
 
-    # For storing detected nucleus labels (for debugging or visualization)
     detected_nc = np.zeros(mask.shape, dtype=np.uint16)
-
+    # --- Process each cell ---
     for obj_label in labels:
-        # Mask for a single cell
         mask_single = mask == obj_label
 
-        # Try to detect nucleus in this cell
-        nc_detect, flag = single_cell_nucleus_detect(mask_single * nucleus_label, *args, **kwargs)
-        nc_mask = nc_detect > 0
+        # Skip very small objects
+        if mask_single.sum() < 1000:
+            continue
+
+        # Detect nucleus within this cell
+        nc_detect, detected = detect_single_cell_nucleus(mask_single * nucleus_label, *args, **kwargs)
 
         # Whole-cell fluorescence stats
-        v_mean, v_max, v_min = __mean_max_min(florescent_image[mask_single])
+        v_mean, v_max, v_min = __calculate_basic_stats(fluorescent_image[mask_single])
 
-        if flag:
+        if detected:
             # Nucleus fluorescence stats
-            n_mean, n_max, n_min = __mean_max_min(florescent_image[nc_mask])
+            n_mean, n_max, n_min = __calculate_basic_stats(fluorescent_image[nc_detect])
 
-            # Cytoplasm region is the cell minus nucleus
-            cytoplasm_mask = mask_single & (~nc_mask)
-            c_mean, c_max, c_min = __mean_max_min(florescent_image[cytoplasm_mask])
+            # Cytoplasm = whole cell - nucleus
+            cytoplasm_mask = mask_single & (~nc_detect)
+            c_mean, c_max, c_min = __calculate_basic_stats(fluorescent_image[cytoplasm_mask])
 
             # Store detected nucleus region for this cell
-            detected_nc[nc_mask] = (obj_label % 1000) + 9000  # label offset for visualization
+            detected_nc[nc_detect] = (obj_label % 1000) + 9000  # label offset for visualization
         else:
-            # If no nucleus detected, treat entire cell as cytoplasm
+            # No nucleus detected → whole cell is cytoplasm
             n_mean = n_max = n_min = 0
             c_mean, c_max, c_min = v_mean, v_max, v_min
 
-        # Add measurement row to results table
+        # Save results
         table.loc[obj_label] = [
             c_mean, c_max, c_min,
             n_mean, n_max, n_min,
@@ -139,33 +118,39 @@ def dPSTR_image_measure2table(florescent_image, mask, nucleus_label, *args, **kw
     return table, detected_nc
 
 
-def post_process(image, selem=disk(3), area_threshold=100, erosion_factor=2):
+def _post_process(image: np.ndarray,
+                  selem: Optional[np.ndarray] = None,
+                  area_threshold: int = 100,
+                  erosion_factor: int = 2):
     """
-    Apply morphological post-processing to clean up a binary image.
+    Apply morphological post-processing to clean up a binary mask.
 
-    Steps:
-    1. Opening to remove small white noise.
-    2. Closing to fill small black holes.
-    3. Remove small objects below a specified area threshold.
-    4. Erode the regions to shrink them slightly and reduce noise.
+    The processing pipeline includes:
+    1. Morphological opening to remove small white noise.
+    2. Morphological closing to fill small black holes.
+    3. Removal of small connected components below a specified area.
+    4. Morphological erosion to slightly shrink regions and refine edges.
 
-    Parameters:
+    Parameters
     ----------
-    image : 2D binary numpy array
-        Input binary mask to be cleaned.
-    selem : ndarray, optional
-        Structuring element used for morphological operations (default: disk(3)).
+    image : numpy.ndarray
+        2D binary input mask (nonzero = foreground).
+    selem : numpy.ndarray, optional
+        Structuring element for morphological operations.
+        If None, a disk of radius 3 is used.
     area_threshold : int, optional
-        Minimum area of objects to keep (default: 100 pixels).
+        Minimum pixel area for objects to keep. Smaller objects are removed.
+        Default is 100.
     erosion_factor : int, optional
-        Radius of erosion to apply after cleaning (default: 2).
+        Radius of erosion (disk size) applied at the final step. Default is 2.
 
-    Returns:
+    Returns
     -------
-    shrunk : 2D binary numpy array
-        Cleaned and eroded binary mask.
+    numpy.ndarray
+        Cleaned binary mask (dtype=bool).
     """
-
+    if selem is None:
+        selem = disk(3)
     # Morphological opening: remove small white noise
     opened = opening(image, selem)
 
@@ -173,49 +158,58 @@ def post_process(image, selem=disk(3), area_threshold=100, erosion_factor=2):
     closed = closing(opened, selem)
 
     # Remove small connected components
-    img_rm_small = remove_small_objects(closed, min_size=area_threshold, connectivity=2)
+    cleaned = remove_small_objects(closed, min_size=area_threshold, connectivity=2)
 
     # Erode the regions slightly to refine the boundaries
-    shrunk = erosion(img_rm_small, disk(erosion_factor))
+    shrunk = erosion(cleaned, disk(erosion_factor))
 
     return shrunk
 
 
-def _single_cell_nucleus_detect(image,
-                                kernel=np.array([[0, 0, 1, 0, 0],
-                                                 [0, 1, 2, 1, 0],
-                                                 [1, 2, 4, 2, 1],
-                                                 [0, 1, 2, 1, 0],
-                                                 [0, 0, 1, 0, 0]]),
-                                percentile=90,
-                                selem=disk(3),
-                                area_threshold=100,
-                                erosion_factor=2):
+def _detect_nucleus_mask(image: np.ndarray,
+                         kernel: Optional[np.ndarray] = None,
+                         percentile: int = 90,
+                         selem: np.ndarray = disk(3),
+                         area_threshold: int = 100,
+                         erosion_factor: int = 2):
     """
-    Detect nucleus regions from a single-cell image using convolution and post-processing.
+    Detect nuclear regions from a single-cell image using convolution filtering,
+    percentile-based thresholding, and morphological post-processing.
 
-    Parameters:
+    Parameters
     ----------
-    image : 2D numpy array
-        Input image (e.g. fluorescence channel with nuclear marker).
-    kernel : 2D numpy array, optional
-        Convolution kernel to enhance nuclear features. Default is a Gaussian-like kernel.
+    image : numpy.ndarray
+        2D input image (e.g., a fluorescence channel highlighting the nucleus).
+    kernel : numpy.ndarray, optional
+        Convolution kernel to enhance nuclear features.
+        If None, a default kernel is used.
     percentile : float, optional
-        Percentile threshold to binarize the convolved response. Default is 90.
-    selem : ndarray, optional
-        Structuring element used in morphological operations. Default is disk(3).
+        Percentile (0–100) used to compute the threshold on the convolved response.
+        Default is 90.
+    selem : numpy.ndarray, optional
+        Structuring element for morphological operations.
+        Default is disk(3).
     area_threshold : int, optional
-        Minimum area for valid segmented objects. Small objects are removed. Default is 100.
+        Minimum pixel area for valid objects. Smaller objects are removed.
+        Default is 100.
     erosion_factor : int, optional
-        Number of erosion steps during post-processing to refine shapes. Default is 2.
+        Number of erosions applied during post-processing to refine the mask.
+        Default is 2.
 
-    Returns:
+    Returns
     -------
-    result : 2D binary numpy array
-        Binary mask indicating detected nucleus regions.
+    numpy.ndarray
+        A binary mask (2D array) where detected nucleus regions are True (1)
+        and background is False (0).
     """
 
     # Enhance nuclear signal using convolution with the specified kernel
+    if kernel is None:
+        kernel = np.array([[0, 0, 1, 0, 0],
+                           [0, 1, 2, 1, 0],
+                           [1, 2, 4, 2, 1],
+                           [0, 1, 2, 1, 0],
+                           [0, 0, 1, 0, 0]])
     response = convolve2d(image, kernel, mode='same')
 
     # Compute threshold value based on the given percentile (ignore background zeros)
@@ -225,49 +219,93 @@ def _single_cell_nucleus_detect(image,
     binary = response > thresh
 
     # Apply morphological post-processing (area filtering, erosion, etc.)
-    result = post_process(binary, selem=selem, area_threshold=area_threshold, erosion_factor=erosion_factor)
+    result = _post_process(binary, selem=selem, area_threshold=area_threshold, erosion_factor=erosion_factor)
 
     return result
 
 
-def single_cell_nucleus_detect(image, *args, **kwargs):
+def detect_single_cell_nucleus(image: np.ndarray, *args, **kwargs):
     """
-    Wrapper for nucleus detection in a single-cell image with automatic cropping.
+    Detect nuclear regions in a single-cell image with automatic cropping.
 
-    This function crops the image around the region of interest (non-zero area),
-    applies nucleus detection, and places the result back into the original image size.
+    This function crops the input image around the non-zero region, applies nucleus
+    detection, and reinserts the result into an output mask of the same size as
+    the original image.
 
-    Parameters:
+    Parameters
     ----------
-    image : 2D numpy array
-        The input image (e.g., nuclear fluorescence channel) for a single cell.
+    image : numpy.ndarray
+        2D input image.
     *args, **kwargs :
-        Additional arguments passed to `_single_cell_nucleus_detect`, such as
-        kernel, percentile, selem, area_threshold, and erosion_factor.
+        Additional arguments forwarded to `_detect_nucleus_mask`, such as:
+        - kernel : 2D numpy.ndarray
+        - percentile : int
+        - selem : numpy.ndarray
+        - area_threshold : int
+        - erosion_factor : int
 
-    Returns:
+    Returns
     -------
-    result_resize : 2D numpy array (same shape as input)
-        Binary mask of detected nucleus, placed into the original image dimensions.
-    flag : bool
+    result_mask : numpy.ndarray
+        2D binary mask (same shape as input) with detected nucleus regions.
+    detected : bool
         True if any nucleus was detected, otherwise False.
     """
 
     # Find the minimal bounding box of the non-zero region in the image
-    x_min, x_max, y_min, y_max = __cropped_index(image)
+    x_min, x_max, y_min, y_max = __get_bbox(image)
 
     # Crop the image to focus on the region of interest
     cropped_image = image[x_min:x_max, y_min:y_max]
 
     # Apply nucleus detection on the cropped image
-    result = _single_cell_nucleus_detect(cropped_image, *args, **kwargs)
+    result_cropped = _detect_nucleus_mask(cropped_image, *args, **kwargs)
 
     # Check if any nucleus was detected
-    flag = np.any(result)
+    detected = np.any(result_cropped)
 
     # Resize result back to original image shape, placing detected region in the original coordinates
     result_resize = np.zeros(image.shape, dtype=np.uint16)
-    if flag:
-        result_resize[x_min:x_max, y_min:y_max] = result
+    if detected:
+        result_resize[x_min:x_max, y_min:y_max] = result_cropped
 
-    return result_resize, flag
+    return result_resize.astype(bool), detected
+
+
+def __calculate_basic_stats(data: np.ndarray) -> Tuple[float, float, float]:
+    """
+    Calculate basic statistics (mean, maximum, minimum) of the input array.
+
+    Parameters
+    ----------
+    data : array-like
+        Input data, typically a NumPy array or a list of numeric values.
+
+    Returns
+    -------
+    tuple of float
+        (mean, max, min) values of the input data.
+    """
+    return np.mean(data), np.max(data), np.min(data)
+
+
+def __get_bbox(data: np.ndarray) -> Tuple[int, int, int, int]:
+    """
+    Compute the bounding box of non-zero elements in a 2D array.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        A 2D array (e.g., image mask). Non-zero values are considered as the region of interest.
+
+    Returns
+    -------
+    tuple of int
+        (x_min, x_max, y_min, y_max) indices of the bounding box.
+    """
+    x_index, y_index = np.where(data)
+    x_min = x_index.min()
+    x_max = x_index.max()
+    y_min = y_index.min()
+    y_max = y_index.max()
+    return x_min, x_max, y_min, y_max
