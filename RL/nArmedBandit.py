@@ -6,7 +6,8 @@ class MultiArmedBandit:
                  probabilities=None,
                  n_arms=10,
                  mode="bernoulli",
-                 noise_std=0.1):
+                 noise_u=0,
+                 noise_std=1):
         """
         Initialize a multi-armed bandit environment.
 
@@ -32,8 +33,10 @@ class MultiArmedBandit:
         if probabilities is None:
             probabilities = np.random.normal(0, 1, n_arms)
         self.probabilities = probabilities
+
         self.n_arms = len(probabilities)
         self.mode = mode
+        self.noise_u = noise_u
         self.noise_std = noise_std
 
     def pull(self, arm):
@@ -58,10 +61,11 @@ class MultiArmedBandit:
 
         # Bernoulli mode: reward = 1 with probability p, else 0
         if self.mode == "bernoulli":
-            noisy_p = np.clip(self.probabilities[arm] + np.random.normal(0, 1), 0, 1)
+            noisy_p = self.probabilities[arm] + np.random.normal(self.noise_u, self.noise_std)
+            noisy_p = 1 / (1 + np.exp(-noisy_p))
             reward = 1.0 if np.random.rand() < noisy_p else 0.0
 
         # Continuous mode: reward sampled from N(mean=p, std=noise_std), clipped to [0, 1]
         elif self.mode == "continuous":
-            reward = self.probabilities[arm]+np.random.normal(0, 1)
+            reward = self.probabilities[arm]+np.random.normal(self.noise_u, self.noise_std)
         return reward
