@@ -77,7 +77,12 @@ class FluorescentClassification():
 
     def prediction_by_label(self):
         _ = self.prediction_data_type()
-        pred = self.data.groupby('label')['channel_prediction'].agg(pd.Series.mode)
+        # pred = self.data.groupby('label')['channel_prediction'].agg(pd.Series.mode)
+        pred = (
+                self.data
+                .groupby('label')['channel_prediction']
+                .agg(lambda x: pd.Series.mode(x).iloc[0])
+            )
         return pred
 
 
