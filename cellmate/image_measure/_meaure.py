@@ -603,6 +603,17 @@ class ImageMeasure():
         nearnest_dis, idx_src = self.trees[source_index].topn(points)
         return [nearnest_dis, idx_src]
 
+    def tips_distance(self, source: int, target: int, ptype="index"):
+        source_index = self.__index_trans(source, ptype)
+        target_index = self.__index_trans(target, ptype)
+        tips_source = np.array(self.tip(source_index))
+        tips_target = np.array(self.tip(target_index))
+
+        dist_matrix = np.linalg.norm(tips_source[:, None, :] - tips_target[None, :, :], axis=2)
+        # Minimum distance
+        min_distance = dist_matrix.min()
+        return min_distance
+
 
 def _isin_list(source: list, target: list):
     """Whether all the source list elements are in the target list,

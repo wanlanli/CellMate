@@ -92,7 +92,7 @@ class CellNetwork():
                    'p_start', 'p_area', 'p_major, p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major, m_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
                    'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
-                   'center_dist', 'nearest_dist', 'time_stamp',]
+                   'center_dist', 'nearest_dist', 'tip_distance', 'time_stamp',]
         """
         cell_p = self.cells[p_label]
         cell_m = self.cells[m_label]
@@ -118,7 +118,8 @@ class CellNetwork():
         feature = list(measure.between_angle(label1, label2, ptype="label")) +\
                   list(measure.between_angle_index(label1, label2, ptype="label", norm=False)) +\
                   list(measure.between_angle_index(label1, label2, ptype="label", norm=True)) +\
-                  list(measure.distance(label1, label2, ptype="label")[0, 0, :2])
+                  list(measure.distance(label1, label2, ptype="label")[0, 0, :2]) +\
+                  list([measure.tips_distance(label1, label2, ptype="label")])
         return feature
 
     def neighbor(self, node, time):
@@ -153,7 +154,7 @@ class CellNetwork():
                    'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
                    'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm', 
-                   'center_dist', 'nearest_dist', 'time_stamp']
+                   'center_dist', 'nearest_dist', 'tip_distance', 'time_stamp']
         if self.cells[parents[0]].strain_type == self.cells[parents[1]].strain_type:
             print("same type")
             return None
