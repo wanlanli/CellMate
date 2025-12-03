@@ -104,7 +104,7 @@ class CellNetwork():
 
         tips_ditance, tip_1, tip_2 = measure.tips_distance(id_label_map[cell_p.id],
                                                            id_label_map[cell_m.id],
-                                                          ptype="label")
+                                                           ptype="label")
 
         cell1_tip = self.check_meet_tips(cell_p.id, tip_1, time)
         cell2_tip = self.check_meet_tips(cell_m.id, tip_2, time)
@@ -162,7 +162,8 @@ class CellNetwork():
                    'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
                    'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm', 
-                   'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip','time_stamp']
+                   'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip', 
+                   'time_stamp']
         if self.cells[parents[0]].strain_type == self.cells[parents[1]].strain_type:
             print("same type")
             return None
@@ -322,7 +323,7 @@ class CellNetwork90(CellNetwork):
                    'p_id', 'm_id',
                    'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
-                   'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm', 
+                   'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
                    'center_dist', 'nearest_dist', 'time_stamp']
         data = pd.DataFrame(None, columns=columns)
         index = 0
