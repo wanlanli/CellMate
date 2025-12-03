@@ -612,7 +612,8 @@ class ImageMeasure():
         dist_matrix = np.linalg.norm(tips_source[:, None, :] - tips_target[None, :, :], axis=2)
         # Minimum distance
         min_distance = dist_matrix.min()
-        return min_distance
+        min_distance_arg = np.argmin(dist_matrix)
+        return min_distance, tips_source[min_distance_arg//2], tips_target[min_distance_arg%2]
 
 
 def _isin_list(source: list, target: list):

@@ -92,7 +92,7 @@ class CellNetwork():
                    'p_start', 'p_area', 'p_major, p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major, m_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
                    'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
-                   'center_dist', 'nearest_dist', 'tip_distance', 'time_stamp',]
+                   'center_dist', 'nearest_dist', 'tip_distance','p_in_new_tip', 'm_in_new_tip', 'time_stamp',]
         """
         cell_p = self.cells[p_label]
         cell_m = self.cells[m_label]
@@ -101,7 +101,15 @@ class CellNetwork():
         f_1 = self.__cell_feature(cell_p, id_label_map[cell_p.id], measure, time)
         f_2 = self.__cell_feature(cell_m, id_label_map[cell_m.id], measure, time)
         f_pair = self.__pair_feature(measure, id_label_map[cell_p.id], id_label_map[cell_m.id])
-        pair_features = [cell_p.id, cell_m.id] + f_1 + f_2 + f_pair + [time]
+
+        tips_ditance, tip_1, tip_2 = measure.tips_distance(id_label_map[cell_p.id],
+                                                           id_label_map[cell_m.id],
+                                                          ptype="label")
+
+        cell1_tip = self.check_meet_tips(cell_p.id, tip_1, time)
+        cell2_tip = self.check_meet_tips(cell_m.id, tip_2, time)
+
+        pair_features = [cell_p.id, cell_m.id] + f_1 + f_2 + f_pair + [tips_ditance, cell1_tip, cell2_tip] + [time]
         return pair_features
 
     def __cell_feature(self, cell, label, measure, time):
@@ -118,8 +126,8 @@ class CellNetwork():
         feature = list(measure.between_angle(label1, label2, ptype="label")) +\
                   list(measure.between_angle_index(label1, label2, ptype="label", norm=False)) +\
                   list(measure.between_angle_index(label1, label2, ptype="label", norm=True)) +\
-                  list(measure.distance(label1, label2, ptype="label")[0, 0, :2]) +\
-                  list([measure.tips_distance(label1, label2, ptype="label")])
+                  list(measure.distance(label1, label2, ptype="label")[0, 0, :2]) # +\
+                   #list(measure.tips_distance(label1, label2, ptype="label")])
         return feature
 
     def neighbor(self, node, time):
@@ -154,7 +162,7 @@ class CellNetwork():
                    'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
                    'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm', 
-                   'center_dist', 'nearest_dist', 'tip_distance', 'time_stamp']
+                   'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip','time_stamp']
         if self.cells[parents[0]].strain_type == self.cells[parents[1]].strain_type:
             print("same type")
             return None
@@ -233,10 +241,76 @@ class CellNetwork():
         print(coords.shape)
         return coords
 
-    # def nearest_point(self, cell_id1, cell_id2):
-    #     frames_1 = self.cells[cell_id1].frames
-    #     frames_2 = self.cells[cell_id2].frames
-    #     frames = list(set(frames_1).intersection(set(frames_2)))
+    def check_fusion_tips(self, cell_id):
+        if self.cells[cell_id].start == 0:
+            return 2
+        if not self.cells[cell_id].fusion:
+            return 2
+        tips = self.tips_overtime(cell_id)
+        division_point = self.get_division_point(cell_id)
+        fusion_point = self.get_fusion_point(cell_id)
+        is_old_tip = is_mated_in_new_tip(tips[0], tips[-1], division_point, fusion_point)
+        return is_old_tip
+
+    def check_meet_tips(self, cell_id, meet_point, time):
+        if self.cells[cell_id].start == 0:
+            return 2
+        cell_label = self.label_map[time][cell_id]
+        start_tips = np.array(self.measure[time].tip(label=cell_label))
+        # tips = self.tips_overtime(cell_id)
+
+        division_point = self.get_division_point(cell_id)
+
+        # fixed_time = np.where(self.cells[cell_id].frames == time)[0]
+        # if len(fixed_time) == 0:
+        #     return 2
+        # else:
+        #     fixed_time = fixed_time[0]
+
+        cell_label_t = self.label_map[time][cell_id]
+        end_tips = np.array(self.measure[time].tip(label=cell_label_t))
+        # print(cell_id, time, cell_label_t, cell_label)
+        is_old_tip = is_mated_in_new_tip(start_tips, end_tips, division_point, meet_point)
+        return is_old_tip
+
+    def get_division_point(self, cell_id):
+        sister_0 = self.cells[cell_id].sister
+        time = self.cells[cell_id].start
+
+        cell_label_t0 = self.label_map[time][cell_id]
+        cell_label_t1 = self.label_map[time][sister_0]
+
+        division_points_0 = self.measure[time].nearest_point(source=cell_label_t0,
+                                                             target=cell_label_t1,
+                                                             ptype="label")
+        return division_points_0[0]
+
+    def get_fusion_point(self, cell_id):
+        spouse_0 = self.cells[cell_id].spouse
+        time = self.cells[cell_id].end
+
+        cell_label_t0 = self.label_map[time][cell_id]
+        cell_label_t1 = self.label_map[time][spouse_0]
+        fusion_points = self.measure[time].nearest_point(source=cell_label_t0,
+                                                         target=cell_label_t1, ptype="label")
+        return fusion_points[0]
+
+
+
+from scipy.spatial.distance import cdist
+def is_mated_in_new_tip(tips_start, tips_end, point_start, point_end):
+    dist_matrix = cdist(tips_start, tips_end)
+    mapping = dist_matrix.argmin(axis=1)
+    mappted_tips_end = tips_end[mapping]
+
+    d0 = np.linalg.norm(tips_start - point_start, axis=1)
+    idx0 = np.argmin(d0)  # index of closest tip
+    d_end = np.linalg.norm(mappted_tips_end - point_end, axis=1)
+    idx_end = np.argmin(d_end)
+
+    return (idx0 == idx_end)*1
+
+
 
 
 class CellNetwork90(CellNetwork):
