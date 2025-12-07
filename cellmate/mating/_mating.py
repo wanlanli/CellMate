@@ -229,7 +229,7 @@ class CellNetwork():
             cell_label_t = self.label_map[time][cell_id]
             coords.append(self.measure[time].coordinate(label=cell_label_t))
         coords = np.array(coords)
-        print(coords.shape)
+        # print(coords.shape)
         return coords
 
     def center_overtime(self, cell_id):
@@ -239,7 +239,7 @@ class CellNetwork():
             cell_label_t = self.label_map[time][cell_id]
             coords.append(self.measure[time].center(label=cell_label_t))
         coords = np.array(coords)
-        print(coords.shape)
+        # print(coords.shape)
         return coords
 
     def check_fusion_tips(self, cell_id):

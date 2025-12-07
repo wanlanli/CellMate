@@ -1,8 +1,12 @@
 import numpy as np
 
 from cellmate.mating import CellNetwork90
-from ._utils import centre_points, circular_sequence, resample_curve
+from ._utils import centre_points, circular_sequence, resample_curve, move_to_center, intensity_multiple_points
 from ..configs import CONTOURS_LENGTH
+from ._classification_patch import prediction_cell_type_patch
+
+
+DIVISION = 1000
 
 
 class CellNetworkPatch(CellNetwork90):
@@ -10,7 +14,7 @@ class CellNetworkPatch(CellNetwork90):
         super().__init__(image, time_network, tracker, threshold, *args, **kwargs)
         self._aligned_coords = {}
 
-    def raw_patch(self, cell_id, image):
+    def raw_patch(self, cell_id, image, channel):
         data_overtime = []
         bg_overtime = []
         frames = self.cells[cell_id].frames
@@ -19,7 +23,11 @@ class CellNetworkPatch(CellNetwork90):
         for i, time in enumerate(frames):
             coord_t = coords[i]
             coord_t = move_to_center(coord_t, centers[i], dist=9)
-            data, bg = intensity_multiple_points(image[time, 1], coord_t, 9, (image[time, -1] % 1000 == cell_id), method="mean", background_percentile=50)
+            data, bg = intensity_multiple_points(image[time, channel],
+                                                 coord_t, 9,
+                                                 (image[time, -1] % 1000 == cell_id),
+                                                 method="mean",
+                                                 background_percentile=50)
             data_overtime.append(data)
             bg_overtime.append(bg)
         data_overtime = np.array(data_overtime)
@@ -78,6 +86,15 @@ class CellNetworkPatch(CellNetwork90):
             index_aligned_2 = np.argmin(np.linalg.norm(aligned_coords_2[idx2] - point2, axis=1))
             aligned_index[f] = [index_aligned_1, index_aligned_2]
         return aligned_index
+
+    def create_cell_type(self, fluorescent_image, mask=None, *arg, **kwargs):
+        if mask is None:
+            mask = self.image
+        cell_pred, data = prediction_cell_type_patch(fluorescent_image, mask, *arg, **kwargs)
+        type_maps = cell_pred.to_dict()
+        for k, v in type_maps.items():
+            self.cells[k % DIVISION].strain_type = v
+        self.fluorescent_intensity = data
 
 
 def common_frames(frames_1, frames_2):
