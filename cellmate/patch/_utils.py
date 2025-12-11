@@ -80,7 +80,7 @@ def intensity_multiple_points(image, centers, radius, mask, method="mean", perce
     #                                                 for i in self.frames])
     for center in centers:
         distance = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
-        mask_i = (distance <= radius) & mask
+        mask_i = (distance <= radius) # & mask
         circular_region = image[mask_i]
         if len(circular_region) > 0:
             if method == "max":

@@ -14,15 +14,14 @@ class CellNetworkPatch(CellNetwork90):
         super().__init__(image, time_network, tracker, threshold, *args, **kwargs)
         self._aligned_coords = {}
 
-    def raw_patch(self, cell_id, image, channel):
+    def raw_patch(self, cell_id, image, channel, dist=5):
         data_overtime = []
         bg_overtime = []
         frames = self.cells[cell_id].frames
         coords = self.aligned_coords(cell_id)
         centers = self.center_overtime(cell_id)
         for i, time in enumerate(frames):
-            coord_t = coords[i]
-            coord_t = move_to_center(coord_t, centers[i], dist=9)
+            coord_t = move_to_center(coords[i], centers[i], dist=dist)
             data, bg = intensity_multiple_points(image[time, channel],
                                                  coord_t, 9,
                                                  (image[time, -1] % 1000 == cell_id),

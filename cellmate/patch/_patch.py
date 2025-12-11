@@ -45,8 +45,8 @@ class DynamicPatch():
         - data_norm: numpy array, the normalized data with only significant values.
         """
         data_norm = (self.data - self.background[:, None])
-        data_norm = data_norm / np.median(data_norm[data_norm > 0])
-        data_norm = data_norm - self.threshold
+        # data_norm = data_norm / np.median(data_norm[data_norm > 0])
+        # data_norm = data_norm - self.threshold
         data_norm = data_norm.clip(0, None)
         return data_norm
 
