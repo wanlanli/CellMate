@@ -14,7 +14,7 @@ class CellNetworkPatch(CellNetwork90):
         super().__init__(image, time_network, tracker, threshold, *args, **kwargs)
         self._aligned_coords = {}
 
-    def raw_patch(self, cell_id, image, channel, dist=5):
+    def raw_patch(self, cell_id, image, channel, dist=5, radius=9):
         data_overtime = []
         bg_overtime = []
         frames = self.cells[cell_id].frames
@@ -23,7 +23,7 @@ class CellNetworkPatch(CellNetwork90):
         for i, time in enumerate(frames):
             coord_t = move_to_center(coords[i], centers[i], dist=dist)
             data, bg = intensity_multiple_points(image[time, channel],
-                                                 coord_t, 9,
+                                                 coord_t, radius,
                                                  (image[time, -1] % 1000 == cell_id),
                                                  method="mean",
                                                  background_percentile=50)
