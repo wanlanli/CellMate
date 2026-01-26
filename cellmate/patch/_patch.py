@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import numpy as np
-from scipy.signal import savgol_filter, find_peaks
+from scipy.signal import savgol_filter, find_peaks, correlate
 from sklearn.cluster import MeanShift
 import scipy.ndimage as ndimage
+from scipy.ndimage import gaussian_filter1d
+
 
 class DynamicPatch():
     def __init__(self, data, background, threshold=2):
@@ -90,7 +92,6 @@ class DynamicPatch():
         mapped_array_take = np.roll(mapped_array_take, index, 1)
         return mapped_array_take, cluster.cluster_centers_
 
-
     def instant_activation(self, time, *args, **kwargs):
         """
         Detects peaks in the normalized signal at a specific time step.
@@ -125,6 +126,53 @@ class DynamicPatch():
             properties.append(property)
             peaks.append(peak)
         return peaks, properties
+
+    def norm_dff(self):
+        data_norm = (self.data - self.background[:, None])/(self.background[:, None] + 1e-6)
+        data_norm = data_norm.clip(0, None)
+        return data_norm
+
+
+def smooth(data, sigma=2):
+    sig = gaussian_filter1d(data, sigma=sigma)
+    return sig/sig.max()
+
+
+def post_process(path, space_range, sigma):
+    norm = path.norm_dff()
+    norm = norm[:, space_range].sum(axis=1)
+    smoothed = smooth(norm, sigma)
+    return smoothed
+
+
+def estimate_delay(x, y, dt=1, max_lag=30):
+    x0 = x - np.mean(x)
+    y0 = y - np.mean(y)
+
+    corr = correlate(y0, x0, mode="full")
+    lags = np.arange(-len(x)+1, len(x))
+
+    mask = np.abs(lags) <= max_lag
+    corr_w = corr[mask]
+    lags_w = lags[mask]
+
+    idx = np.argmax(corr_w)
+    best_lag = lags_w[idx]
+    best_corr = corr_w[idx]
+
+    # normalize correlation
+    best_corr /= (np.std(x0) * np.std(y0) * len(x0))
+
+    delay_time = best_lag * dt
+
+    y = corr_w  # your 1D signal
+    # find all peaks
+    peaks, props = find_peaks(y)
+    # take the 3 highest peaks
+    top3 = peaks[np.argsort(y[peaks])[-3:]]
+    top3 = np.sort(top3)
+
+    return best_lag, delay_time, best_corr, corr_w, lags_w, lags_w[top3]
 
 
 def detect_peaks(signal, window_length=21, polyorder=5, prominence=0.4, width=3):

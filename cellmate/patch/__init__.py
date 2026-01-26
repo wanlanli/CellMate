@@ -14,7 +14,7 @@
 
 from ._patchcell import CellNetworkPatch
 from ._utils import intensity_multiple_points, circular_sequence, resample_curve, move_to_center, intensity_multiple_points_debug
-from ._patch import DynamicPatch
+from ._patch import DynamicPatch, post_process, estimate_delay
 
 
 __all__ = [
@@ -25,4 +25,6 @@ __all__ = [
     "move_to_center",
     "intensity_multiple_points_debug",
     "DynamicPatch",
+    "post_process",
+    "estimate_delay",
 ]
