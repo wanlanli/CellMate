@@ -146,6 +146,9 @@ def post_process(path, space_range, sigma):
 
 
 def estimate_delay(x, y, dt=1, max_lag=30):
+    x = np.tanh((x - x.mean()) / (x.std() + 1e-9))
+    y = np.tanh((y - y.mean()) / (y.std() + 1e-9))
+
     x0 = x - np.mean(x)
     y0 = y - np.mean(y)
 
