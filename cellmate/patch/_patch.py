@@ -15,7 +15,7 @@ import numpy as np
 from scipy.signal import savgol_filter, find_peaks, correlate
 from sklearn.cluster import MeanShift
 import scipy.ndimage as ndimage
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
 
 class DynamicPatch():
@@ -132,9 +132,15 @@ class DynamicPatch():
         data_norm = data_norm.clip(0, None)
         return data_norm
 
+    def post_process(self):
+        # 1 remove bg:
+        data = self.data - self.background[:, None] # /(self.background[:, None] + 1e-6)
+        # 2 top k mean
+
 
 def smooth(data, sigma=2):
     sig = gaussian_filter1d(data, sigma=sigma)
+    sig = sig - sig.min()
     return sig/sig.max()
 
 
@@ -145,37 +151,37 @@ def post_process(path, space_range, sigma):
     return smoothed
 
 
-def estimate_delay(x, y, dt=1, max_lag=30):
-    x = np.tanh((x - x.mean()) / (x.std() + 1e-9))
-    y = np.tanh((y - y.mean()) / (y.std() + 1e-9))
+# def estimate_delay(x, y, dt=1, max_lag=30):
+#     x = np.tanh((x - x.mean()) / (x.std() + 1e-9))
+#     y = np.tanh((y - y.mean()) / (y.std() + 1e-9))
 
-    x0 = x - np.mean(x)
-    y0 = y - np.mean(y)
+#     x0 = x - np.mean(x)
+#     y0 = y - np.mean(y)
 
-    corr = correlate(y0, x0, mode="full")
-    lags = np.arange(-len(x)+1, len(x))
+#     corr = correlate(y0, x0, mode="full")
+#     lags = np.arange(-len(x)+1, len(x))
 
-    mask = np.abs(lags) <= max_lag
-    corr_w = corr[mask]
-    lags_w = lags[mask]
+#     mask = np.abs(lags) <= max_lag
+#     corr_w = corr[mask]
+#     lags_w = lags[mask]
 
-    idx = np.argmax(corr_w)
-    best_lag = lags_w[idx]
-    best_corr = corr_w[idx]
+#     idx = np.argmax(corr_w)
+#     best_lag = lags_w[idx]
+#     best_corr = corr_w[idx]
 
-    # normalize correlation
-    best_corr /= (np.std(x0) * np.std(y0) * len(x0))
+#     # normalize correlation
+#     best_corr /= (np.std(x0) * np.std(y0) * len(x0))
 
-    delay_time = best_lag * dt
+#     delay_time = best_lag * dt
 
-    y = corr_w  # your 1D signal
-    # find all peaks
-    peaks, props = find_peaks(y)
-    # take the 3 highest peaks
-    top3 = peaks[np.argsort(y[peaks])[-3:]]
-    top3 = np.sort(top3)
+#     y = corr_w  # your 1D signal
+#     # find all peaks
+#     peaks, props = find_peaks(y)
+#     # take the 3 highest peaks
+#     top3 = peaks[np.argsort(y[peaks])[-3:]]
+#     top3 = np.sort(top3)
 
-    return best_lag, delay_time, best_corr, corr_w, lags_w, lags_w[top3]
+#     return best_lag, delay_time, best_corr, corr_w, lags_w, lags_w[top3]
 
 
 def detect_peaks(signal, window_length=21, polyorder=5, prominence=0.4, width=3):
@@ -213,3 +219,107 @@ def recurrent_index(start, end, maxlength):
         end = end+maxlength
     indices = np.arange(start, end) % maxlength  # end + 10 to cover the wrap-around
     return indices
+
+
+def patch_activity_picker(patch, key_range, win=50, sigma=2):
+    raw_data  = patch.data.copy()
+    rm_bg = raw_data - patch.background[:, None]
+    # rm_bg = rm_bg.clip(0, None)
+    data_range = rm_bg[:, key_range]
+    # topk = np.percentile(data_range, 1000/len(key_range), axis=1)
+    # mask = data_range > topk[:, None]
+    # topk_data = np.mean(data_range, axis=1, where=mask)
+    max_data = data_range.max(axis=1)
+    # mean_data = data_range.mean(axis=1)
+    # data_list = [max_data, mean_data, topk_data]
+    dff_list = local_zscore(max_data, win=win)
+    smooth_list = gaussian_filter1d(dff_list, sigma=sigma)
+    zscore_list = zscore(smooth_list)
+    tanh_list = np.tanh(zscore_list)
+    # labels = ["max", "mean", "topk"]
+    final = tanh_list.clip(0, None)
+    return final
+
+
+def dff(trace, win=30):
+    # if f0_mode == "percentile":
+    #     f0 = np.nanpercentile(trace, f0_percentile)
+    # elif f0_mode == "first_n":
+    #     f0 = np.nanmean(trace[:f0_first_n])
+    # elif f0_mode == "median":
+    #     f0 = np.nanmedian(trace)
+    # else:
+    #     raise ValueError("invalid f0_mode")
+    f0 = uniform_filter1d(trace, size=win, mode="nearest")
+    trace = (trace - f0) / (abs(f0) + 1e-6)
+    return trace
+
+
+def local_zscore(x, win=80, eps=1e-6, std_floor=None):
+    """
+    Local z-score: (x - local_mean) / local_std
+    std_floor: optional minimum std to avoid blow-up, e.g., 0.05 * np.std(x)
+    """
+    x = np.asarray(x, dtype=float)
+    mu = uniform_filter1d(x, size=win, mode="nearest")
+    mu2 = uniform_filter1d(x**2, size=win, mode="nearest")
+    var = np.maximum(mu2 - mu**2, 0.0)
+    sigma = np.sqrt(var)
+
+    if std_floor is not None:
+        sigma = np.maximum(sigma, std_floor)
+
+    z = (x - mu) / (sigma + eps)
+    return z
+
+
+def zscore(data):
+    return (data-data.mean()) / (data.std() + 1e-6)
+
+
+def estimate_delay(
+    x, y, dt=1.0, eps=1e-12,
+    use_abs_peaks=False,
+    min_peak_dist=1
+):
+    """
+    Full-length cross-correlation, choose the PEAK whose |lag| is minimal.
+
+    Returns
+    -------
+    peak_lag : int
+    peak_delay_time : float
+    peak_corr_norm : float
+    corr_norm : np.ndarray
+    lags : np.ndarray
+    """
+    # x = np.asarray(x, dtype=float)
+    # y = np.asarray(y, dtype=float)
+
+    # demean
+    x0 = x - np.mean(x)
+    y0 = y - np.mean(y)
+
+    # full cross-correlation
+    corr = correlate(y0, x0, mode="full")
+    lags = np.arange(-len(x0) + 1, len(x0))
+
+    # normalize
+    denom = (np.std(x0) * np.std(y0) * len(x0)) + eps
+    corr_norm = corr / denom
+
+    # peak finding
+    score = np.abs(corr_norm) if use_abs_peaks else corr_norm
+    peaks, _ = find_peaks(score, distance=max(1, int(min_peak_dist)))
+
+    if len(peaks) == 0:
+        return None, None, None, corr_norm, lags
+
+    # 🔑 choose peak with minimal |lag|
+    best_peak_idx = peaks[np.argmin(np.abs(lags[peaks]))]
+
+    peak_lag = int(lags[best_peak_idx])
+    peak_corr_norm = float(corr_norm[best_peak_idx])
+    peak_delay_time = peak_lag * dt
+
+    return peak_lag, peak_delay_time, peak_corr_norm, corr_norm, lags, peaks
