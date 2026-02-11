@@ -15,7 +15,7 @@
 from ._patchcell import CellNetworkPatch
 from ._utils import intensity_multiple_points, circular_sequence, resample_curve, move_to_center, intensity_multiple_points_debug
 from ._patch import DynamicPatch, post_process, estimate_delay, patch_activity_picker
-
+from ._classification_patch import prediction_cell_type_patch
 
 __all__ = [
     "CellNetworkPatch",
@@ -27,5 +27,6 @@ __all__ = [
     "DynamicPatch",
     "post_process",
     "estimate_delay",
-    "patch_activity_picker"
+    "patch_activity_picker",
+    "prediction_cell_type_patch",
 ]
