@@ -4,7 +4,7 @@ from ._classification import instance_fluorescent_intensity, background, Fluores
 from ._classification2d import prediction_cell_type2d
 from ._classification90 import instance_fluorescent_intensity_h90, get_intensity_table
 from ._classification_patch import prediction_cell_type_patch
-
+from .feature_extract import get_mating_feature
 
 __all__ = [
     "CellNetwork",
@@ -18,4 +18,5 @@ __all__ = [
     "instance_fluorescent_intensity_h90",
     "get_intensity_table",
     "prediction_cell_type_patch",
+    "get_mating_feature",
 ]
