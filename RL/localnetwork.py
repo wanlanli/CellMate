@@ -9,12 +9,14 @@ from scipy.optimize import linear_sum_assignment
 # =========================================================
 
 @dataclass
-class SimConfig:
-    n_agents_per_side: int = 50     # number of A and B agents
-    box_size: float = 100.0         # 2D square [0, box_size]^2
+class MatchConfig:
+    n_agents_per_side: int = 50     # number of A(p) and B(m) agents
+    # box_size: float = 100.0         # 2D square [0, box_size]^2
     n_trials: int = 100
     sensing_radius: Optional[float] = None   # None = all visible
     topk_list: Tuple[int, ...] = (1, 2, 3, 5)
+    commit_threshold = 1
+    
     seed: int = 42
 
 
@@ -22,9 +24,9 @@ class SimConfig:
 # Utilities
 # =========================================================
 
-def generate_agents(n: int, box_size: float, rng: np.random.Generator) -> np.ndarray:
+def generate_agents(n: int, rng: np.random.Generator) -> np.ndarray:
     """Generate 2D coordinates."""
-    return rng.uniform(0, box_size, size=(n, 2))
+    return rng.uniform(0, size=(n, 2))
 
 
 def pairwise_dist(A: np.ndarray, B: np.ndarray) -> np.ndarray:
@@ -138,10 +140,6 @@ def greedy_nearest_matching(D: np.ndarray, visible_mask: np.ndarray) -> Dict[int
 
     return match
 
-
-# =========================================================
-# Your local policy template
-# =========================================================
 
 def my_local_policy_score(
     d_ij: float,
@@ -267,116 +265,253 @@ def local_policy_matching(
     return match
 
 
-
-def local_policy_matching(
-    D: np.ndarray,
-    Theta: np.ndarray,
-    visible_mask: np.ndarray,
-    score_fn: Callable[[float, float, int], float],
-    conflict_mode: str = "mutual_best",
-) -> Dict[int, int]:
+# =========================================================
+# Yeast local policy template
+# =========================================================
+def select_non_conflicting_pairs(commit_map, score_map, active_A, active_B):
     """
-    Local policy:
-      1. each A selects one preferred B using only local info
-      2. conflicts are resolved
+    From all committed candidate pairs, pick a set of pairs such that
+    each A and each B is used at most once in this round.
 
-    conflict_mode:
-      - "mutual_best": keep only mutual best pairs, then iterate
-      - "priority_distance": resolve B conflicts by smallest distance
+    Greedy: sort candidate pairs by score descending.
     """
-    nA, nB = D.shape
-    remaining_A = set(range(nA))
-    remaining_B = set(range(nB))
-    match: Dict[int, int] = {}
+    candidate_rc = np.argwhere(commit_map)
 
-    while remaining_A and remaining_B:
-        proposals_A_to_B = {}
-        proposals_B_to_A = {}
+    if len(candidate_rc) == 0:
+        return []
 
-        # A -> preferred B
-        for i in remaining_A:
-            candidates = [j for j in remaining_B if visible_mask[i, j]]
-            if not candidates:
-                continue
+    # keep only active rows/cols
+    filtered = []
+    for i, j in candidate_rc:
+        if active_A[i] and active_B[j]:
+            filtered.append((i, j, score_map[i, j]))
 
-            sorted_candidates = sorted(candidates, key=lambda j: D[i, j])
-            best_j = None
-            best_score = -np.inf
+    if not filtered:
+        return []
 
-            for rank, j in enumerate(sorted_candidates, start=1):
-                s = score_fn(
-                    d_ij=float(D[i, j]),
-                    theta_ij=float(Theta[i, j]),
-                    local_rank_by_distance=rank,
-                )
-                if s > best_score:
-                    best_score = s
-                    best_j = j
+    filtered.sort(key=lambda x: x[2], reverse=True)
 
-            proposals_A_to_B[i] = best_j
+    chosen = []
+    used_A = set()
+    used_B = set()
 
-        if not proposals_A_to_B:
+    for i, j, s in filtered:
+        if i not in used_A and j not in used_B:
+            chosen.append((i, j))
+            used_A.add(i)
+            used_B.add(j)
+
+    return chosen
+
+
+def agent_update_matrix(A, response_threshold):
+    """
+    A: 2D matrix, choose one column for each row
+    returns:
+        final_idx: chosen column index for each row
+        final_vals: chosen value for each row
+    """
+    n_rows, n_cols = A.shape
+
+    max_vals = np.max(A, axis=1)
+    argmax_idx = np.argmax(A, axis=1)
+
+    rand_idx = np.random.randint(0, n_cols, size=n_rows)
+    use_max = max_vals > response_threshold
+
+    final_idx = np.where(use_max, argmax_idx, rand_idx)
+    final_vals = A[np.arange(n_rows), final_idx]
+
+    return final_idx, final_vals
+
+
+def simulate_pairing(
+    map_A_pheno,
+    map_B_pheno,
+    distance,
+    response_threshold,
+    commit_threshold,
+    decay,
+    reaction,
+    diffusion_1d,
+    max_iter=800,
+):
+    """
+    Iteratively update A/B pheromone maps and commit pairs.
+    Committed A and B are removed from future consideration.
+    """
+
+    map_A_pheno = map_A_pheno.copy()
+    map_B_pheno = map_B_pheno.copy()
+
+    nA, nB = map_A_pheno.shape
+
+    active_A = np.ones(nA, dtype=bool)
+    active_B = np.ones(nB, dtype=bool)
+
+    committed_pairs = []
+
+    for step in range(max_iter):
+        if not active_A.any() or not active_B.any():
             break
 
-        if conflict_mode == "priority_distance":
-            # Many A may propose same B; B keeps the closest one
-            grouped: Dict[int, List[int]] = {}
-            for i, j in proposals_A_to_B.items():
-                grouped.setdefault(j, []).append(i)
+        # Only active rows/cols participate
+        valid_mask = np.outer(active_A, active_B)
 
-            accepted_pairs = []
-            for j, proposers in grouped.items():
-                i_best = min(proposers, key=lambda i: D[i, j])
-                accepted_pairs.append((i_best, j))
+        # -------- A update --------
+        # inactive positions are ignored
+        A_view_for_choice = np.where(valid_mask, map_B_pheno, -np.inf)
 
-        elif conflict_mode == "mutual_best":
-            # B also chooses best A among remaining_A using same local rule
-            for j in remaining_B:
-                candidates = [i for i in remaining_A if visible_mask[i, j]]
-                if not candidates:
-                    continue
+        # only active A rows choose
+        active_A_idx = np.where(active_A)[0]
+        if len(active_A_idx) > 0 and active_B.any():
+            chosen_B_local, sensed_B = agent_update_matrix(
+                A_view_for_choice[active_A_idx, :],
+                response_threshold
+            )
 
-                sorted_candidates = sorted(candidates, key=lambda i: D[i, j])
-                best_i = None
-                best_score = -np.inf
+            updated_A_map = np.zeros_like(map_A_pheno) + decay
 
-                for rank, i in enumerate(sorted_candidates, start=1):
-                    s = score_fn(
-                        d_ij=float(D[i, j]),
-                        theta_ij=float(Theta[i, j] + np.pi),  # rough reverse angle
-                        local_rank_by_distance=rank,
-                    )
-                    if s > best_score:
-                        best_score = s
-                        best_i = i
+            chosen_B = chosen_B_local
+            row_idx = active_A_idx
 
-                proposals_B_to_A[j] = best_i
+            # add released signal only to chosen targets
+            new_pheno_A = diffusion_1d(
+                distance[row_idx, chosen_B],
+                t=1,
+                M=reaction(sensed_B)
+            )
 
-            accepted_pairs = []
-            for i, j in proposals_A_to_B.items():
-                if proposals_B_to_A.get(j, None) == i:
-                    accepted_pairs.append((i, j))
+            updated_A_map[row_idx, chosen_B] += new_pheno_A
 
-        else:
-            raise ValueError(f"Unknown conflict_mode: {conflict_mode}")
+            # optionally stop decay on invalid positions:
+            updated_A_map[~valid_mask] = 0
 
-        if not accepted_pairs:
-            break
+            map_A_pheno += updated_A_map
+            map_A_pheno = np.clip(map_A_pheno, 0, None)
 
-        for i, j in accepted_pairs:
-            match[int(i)] = int(j)
+        # -------- B update --------
+        # each active B chooses one active A
+        B_view_for_choice = np.where(valid_mask, map_A_pheno, -np.inf)
 
-        matched_A = {i for i, _ in accepted_pairs}
-        matched_B = {j for _, j in accepted_pairs}
-        remaining_A -= matched_A
-        remaining_B -= matched_B
+        active_B_idx = np.where(active_B)[0]
+        if len(active_B_idx) > 0 and active_A.any():
+            # transpose so each B is now a row
+            chosen_A_local, sensed_A = agent_update_matrix(
+                B_view_for_choice[:, active_B_idx].T,
+                response_threshold
+            )
 
-    return match
+            updated_B_map = np.zeros_like(map_B_pheno) + decay
 
+            col_idx = active_B_idx
+            chosen_A = chosen_A_local
+
+            new_pheno_B = diffusion_1d(
+                distance[chosen_A, col_idx],
+                t=1,
+                M=reaction(sensed_A)
+            )
+
+            updated_B_map[chosen_A, col_idx] += new_pheno_B
+
+            # optionally stop decay on invalid positions:
+            updated_B_map[~valid_mask] = 0
+
+            map_B_pheno += updated_B_map
+            map_B_pheno = np.clip(map_B_pheno, 0, None)
+
+        # -------- commit detection --------
+        commit_map = (
+            (map_A_pheno >= commit_threshold) &
+            (map_B_pheno >= commit_threshold) &
+            valid_mask
+        )
+
+        # score used to rank simultaneous candidate commitments
+        score_map = map_A_pheno + map_B_pheno
+
+        new_pairs = select_non_conflicting_pairs(
+            commit_map, score_map, active_A, active_B
+        )
+
+        if new_pairs:
+            committed_pairs.extend(new_pairs)
+
+            for i, j in new_pairs:
+                active_A[i] = False
+                active_B[j] = False
+
+                # optional: zero out committed row/col so they never influence again
+                map_A_pheno[i, :] = 0
+                map_A_pheno[:, j] = 0
+                map_B_pheno[i, :] = 0
+                map_B_pheno[:, j] = 0
+
+        # optional early stop: nothing can happen anymore
+        if not new_pairs and step > max_iter:
+            # keep or remove this depending on whether you want long accumulation
+            pass
+    # return {
+    #     "committed_pairs": committed_pairs,
+    #     "map_A_pheno": map_A_pheno,
+    #     "map_B_pheno": map_B_pheno,
+    #     "active_A": active_A,
+    #     "active_B": active_B,
+    # }
+    return dict(committed_pairs)
+
+
+def reaction(l, kd=1):
+    return l/(l+kd)
+
+
+def diffusion_1d(x, t, D=1.0, M=1.0):
+    """
+    1D diffusion from point source.
+
+    Parameters
+    ----------
+    x : float or np.ndarray
+        position(s)
+    t : float or np.ndarray
+        time(s), must be > 0
+    D : float
+        diffusion coefficient
+    M : float
+        total released amount
+
+    Returns
+    -------
+    c : float or np.ndarray
+        concentration
+    """
+    x = np.asarray(x)
+    t = np.asarray(t)
+
+    # avoid division by zero
+    t = np.maximum(t, 1e-12)
+
+    return M / np.sqrt(4 * np.pi * D * t) * np.exp(-x**2 / (4 * D * t))
+
+
+def yeast_policy_pairing(A, B, distance, rng, decay=-0.02, response_threshold=0.1, commit_threshold=1,):
+    map_A_pheno = diffusion_1d(distance, t=1)
+    map_B_pheno = diffusion_1d(distance, t=1)
+    committed_pairs = simulate_pairing(map_A_pheno, 
+                                       map_B_pheno, 
+                                       distance, 
+                                       response_threshold, 
+                                       commit_threshold, 
+                                       decay, 
+                                       reaction,
+                                       diffusion_1d)
+    return committed_pairs
 
 # =========================================================
 # Evaluation
 # =========================================================
+
 
 def matching_cost(match: Dict[int, int], D: np.ndarray) -> float:
     return float(sum(D[i, j] for i, j in match.items()))
@@ -411,8 +546,8 @@ def unmatched_fraction(match: Dict[int, int], nA: int) -> float:
 # =========================================================
 
 def run_one_trial(cfg: SimConfig, rng: np.random.Generator) -> Dict[str, Dict]:
-    A = generate_agents(cfg.n_agents_per_side, cfg.box_size, rng)
-    B = generate_agents(cfg.n_agents_per_side, cfg.box_size, rng)
+    A = generate_agents(cfg.n_agents_per_side, rng)
+    B = generate_agents(cfg.n_agents_per_side, rng)
 
     D = pairwise_dist(A, B)
     Theta = pairwise_angle(A, B)
@@ -432,6 +567,16 @@ def run_one_trial(cfg: SimConfig, rng: np.random.Generator) -> Dict[str, Dict]:
             visible_mask=visible_mask,
             score_fn=my_local_policy_score,
             conflict_mode="mutual_best",
+        ),
+        "yeast_policy": yeast_policy_pairing(
+            A=A,
+            B=B,
+            distance=D,
+            rng=rng,
+            # Theta=Theta,
+            # visible_mask=visible_mask,
+            # score_fn=local_policy_matching,
+            # conflict_mode="mutual_best",
         ),
     }
 
