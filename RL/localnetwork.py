@@ -1,6 +1,6 @@
 import numpy as np
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from scipy.optimize import linear_sum_assignment
 
 
@@ -186,45 +186,55 @@ def random_matching(D: np.ndarray, visible_mask: np.ndarray, rng: np.random.Gene
     return match
 
 
-def greedy_nearest_matching(D: np.ndarray, visible_mask: np.ndarray) -> Dict[int, int]:
+def greedy_global_matching(D: np.ndarray, visible: np.ndarray):
     """
-    Sequential nearest-neighbor one-to-one matching.
+    Sort all visible edges by distance ascending, then greedily pick non-conflicting edges.
     """
     nA, nB = D.shape
+    edges = [(D[i, j], i, j) for i in range(nA) for j in range(nB) if visible[i, j]]
+    edges.sort(key=lambda x: x[0])
+
+    used_A = set()
+    used_B = set()
+    match_A_to_B = {}
+
+    for dist, i, j in edges:
+        if i not in used_A and j not in used_B:
+            match_A_to_B[i] = j
+            used_A.add(i)
+            used_B.add(j)
+    return match_A_to_B
+
+
+def greedy_rowwise_matching(D: np.ndarray, visible: np.ndarray, row_order: Optional[List[int]] = None,):
+    """
+    Traverse A in order. Each A_i chooses the nearest currently available visible B_j.
+    """
+    nA, nB = D.shape
+    if row_order is None:
+        row_order = list(range(nA))
+
     available_B = set(range(nB))
-    unmatched_A = set(range(nA))
-    match = {}
+    match_A_to_B = {}
 
-    while unmatched_A and available_B:
-        best_pair = None
-        best_cost = np.inf
-
-        for i in unmatched_A:
-            valid_js = [j for j in available_B if visible_mask[i, j]]
-            if not valid_js:
-                continue
-            j_best = min(valid_js, key=lambda j: D[i, j])
-            c = D[i, j_best]
-            if c < best_cost:
-                best_cost = c
-                best_pair = (i, j_best)
-
-        if best_pair is None:
-            break
-
-        i, j = best_pair
-        match[int(i)] = int(j)
-        unmatched_A.remove(i)
-        available_B.remove(j)
-
-    return match
+    for i in row_order:
+        candidates = [j for j in available_B if visible[i, j]]
+        if len(candidates) == 0:
+            continue
+        j_best = min(candidates, key=lambda j: D[i, j])
+        match_A_to_B[i] = j_best
+        available_B.remove(j_best)
+    return match_A_to_B
 
 
 # =========================================================
 # Yeast local policy template
 # =========================================================
 def reaction(l, kd=1):
-    return l/(l+kd+1e-6)
+    # return l/(l+kd+1e-6)
+    den = l + kd + 1e-6
+    out = np.divide(l, den, out=np.zeros_like(den, dtype=float), where=np.isfinite(l) & np.isfinite(den))
+    return out
 
 
 def diffusion_1d(x, t, D=1.0, M=1.0):
@@ -268,10 +278,12 @@ class YeastMatching():
 
         self.diffusion_a = 10
         self.diffusion_b = 1
-        self.m_a = 10
-        self.m_b = 1
+        self.m_a = 20
+        self.m_b = 20
 
         self.max_iter = 1000
+        self.map_A_pheno = np.zeros(self.D.shape)
+        self.map_B_pheno = np.zeros(self.D.shape)
 
     def select_non_conflicting_pairs(self, commit_map, score_map, active_A, active_B):
         """
@@ -334,8 +346,8 @@ class YeastMatching():
         Committed A and B are removed from future consideration.
         """
 
-        map_A_pheno = map_A_pheno.copy()
-        map_B_pheno = map_B_pheno.copy()
+        # map_A_pheno = map_A_pheno.copy()
+        # map_B_pheno = map_B_pheno.copy()
 
         nA, nB = map_A_pheno.shape
 
@@ -370,8 +382,8 @@ class YeastMatching():
                     self.D[row_idx, chosen_B],
                     t=1,
                     D=self.diffusion_b,
-                    M=reaction(sensed_B)
-                )*self.m_a
+                    M=reaction(sensed_B)*self.m_a,
+                )
 
                 updated_A_map[row_idx, chosen_B] += new_pheno_A
 
@@ -400,8 +412,8 @@ class YeastMatching():
                     self.D[chosen_A, col_idx],
                     t=1,
                     D=self.diffusion_a,
-                    M=reaction(sensed_A),
-                )*self.m_b
+                    M=reaction(sensed_A)*self.m_b,
+                )
 
                 updated_B_map[chosen_A, col_idx] += new_pheno_B
 
@@ -437,33 +449,34 @@ class YeastMatching():
                     map_A_pheno[:, j] = 0
                     map_B_pheno[i, :] = 0
                     map_B_pheno[:, j] = 0
-
-            # # optional early stop: nothing can happen anymore
-            # if not new_pairs and step > self.max_iter:
-            #     # keep or remove this depending on whether you want long accumulation
-            #     pass
-        # return {
-        #     "committed_pairs": committed_pairs,
-        #     "map_A_pheno": map_A_pheno,
-        #     "map_B_pheno": map_B_pheno,
-        #     "active_A": active_A,
-        #     "active_B": active_B,
-        # }
         return dict(committed_pairs)
 
     def matching(self):
-        map_A_pheno = diffusion_1d(self.D, t=1)
-        map_B_pheno = diffusion_1d(self.D, t=1)
-        committed_pairs = self.simulate_pairing(map_A_pheno, map_B_pheno)
+        self.map_A_pheno = diffusion_1d(self.D, t=1)
+        self.map_B_pheno = diffusion_1d(self.D, t=1)
+        committed_pairs = self.simulate_pairing(self.map_A_pheno, self.map_B_pheno)
         return committed_pairs
 
 
 class Evaluator():
+    def __init__(self, match_optimal, D):
+        self.match_optimal = match_optimal
+        self.D = D
+        self.K_opt = len(self.match_optimal)
+        self.C_opt = self.matching_cost(self.match_optimal, D)
+        self.avg_C_opt = self.C_opt / self.K_opt if self.K_opt > 0 else 0.0,
+        self.E_opt = self.matching_edges(match_optimal)
+
     # =========================================================
     # Evaluation
     # =========================================================
+    def extract_matched_distances(self, match_A_to_B: Dict[int, int], D: np.ndarray) -> np.ndarray:
+        if len(match_A_to_B) == 0:
+            return np.array([], dtype=float)
+        return np.array([D[i, j] for i, j in match_A_to_B.items()], dtype=float)
+
     def matching_cost(self, match: Dict[int, int], D: np.ndarray) -> float:
-        return float(sum(D[i, j] for i, j in match.items()))
+        return self.extract_matched_distances(match, D).sum()
 
     def exact_match_accuracy(self, match: Dict[int, int], optimal_match: Dict[int, int], nA: int) -> float:
         correct = sum(1 for i, j in match.items() if optimal_match.get(i, None) == j)
@@ -472,6 +485,38 @@ class Evaluator():
     def unmatched_fraction(self, match: Dict[int, int], nA: int) -> float:
         return 1.0 - len(match) / nA
 
+    def matching_edges(self, match):
+        return set((int(i), int(j)) for i, j in match.items())
+
+    def metric(self, match):
+        D = self.D
+        dists = self.extract_matched_distances(match, D)
+        nA = D.shape[0]
+        nB = D.shape[1]
+        K_curr = len(match)
+        C_curr = float(dists.sum()) if K_curr else 0.0
+        overlap = len(self.matching_edges(match) & self.E_opt)
+        precision = overlap / K_curr if K_curr > 0 else np.nan
+        recall = overlap / self.K_opt if self.K_opt > 0 else np.nan
+        f1 = (2 * precision * recall / (precision + recall) if K_curr > 0 and self.K_opt > 0 and (precision + recall) > 0 else np.nan)
+        mec = {
+            "matching_rate": K_curr / min(nA, nB) if min(nA, nB) > 0 else 0.0,
+            "A_coverage": K_curr / nA if nA > 0 else 0.0,
+            "B_coverage": K_curr / nB if nB > 0 else 0.0,
+            "total_distance": C_curr,
+            "avg_distance": float(dists.mean()) if K_curr else np.nan,
+            "median_distance": float(np.median(dists)) if K_curr else np.nan,
+            "std_distance": float(dists.std()) if K_curr else np.nan,
+            "cardinality_gap":  self.K_opt - K_curr,
+            "cardinality_ratio": K_curr / self.K_opt if self.K_opt > 0 else np.nan,
+            "cost_gap": (C_curr - self.C_opt) if K_curr == self.K_opt else np.nan,
+            "relative_cost_gap": ((C_curr - self.C_opt) / self.C_opt) if (K_curr == self.K_opt and self.C_opt > 0) else np.nan,
+            "edge_overlap": overlap / self.K_opt if self.K_opt > 0 else np.nan,
+            "precision_vs_opt": precision,
+            "recall_vs_opt": recall,
+            "f1_vs_opt": f1,
+        }
+        return mec
 
 # =========================================================
 # One trial
