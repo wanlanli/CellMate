@@ -2,7 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, Optional
 from scipy.optimize import linear_sum_assignment
-
+from .diffustion import distance_concentration_kernel
 
 # =========================================================
 # Configuration
@@ -230,40 +230,12 @@ def greedy_rowwise_matching(D: np.ndarray, visible: np.ndarray, row_order: Optio
 # =========================================================
 # Yeast local policy template
 # =========================================================
-def reaction(l, kd=1):
-    # return l/(l+kd+1e-6)
+def reaction(l, kd=0.1, alpha=1, beta=0.1):
+    l += 1e-3
     den = l + kd + 1e-6
     out = np.divide(l, den, out=np.zeros_like(den, dtype=float), where=np.isfinite(l) & np.isfinite(den))
+    out = alpha*out+beta*l
     return out
-
-
-def diffusion_1d(x, t, D=1.0, M=1.0):
-    """
-    1D diffusion from point source.
-
-    Parameters
-    ----------
-    x : float or np.ndarray
-        position(s)
-    t : float or np.ndarray
-        time(s), must be > 0
-    D : float
-        diffusion coefficient
-    M : float
-        total released amount
-
-    Returns
-    -------
-    c : float or np.ndarray
-        concentration
-    """
-    x = np.asarray(x)
-    t = np.asarray(t)
-
-    # avoid division by zero
-    t = np.maximum(t, 1e-12)
-
-    return M / np.sqrt(4 * np.pi * D * t) * np.exp(-x**2 / (4 * D * t))
 
 
 class YeastMatching():
@@ -272,16 +244,16 @@ class YeastMatching():
         self.B = B
         self.D = D
 
-        self.commit_threshold = 1
-        self.response_threshold = 0.1
-        self.decay = -0.02
+        self.commit_threshold = 3
+        # self.response_threshold = 0.1
+        self.decay = -0.01
 
-        self.diffusion_a = 10
-        self.diffusion_b = 1
-        self.m_a = 20
-        self.m_b = 20
+        self.diffusion_a = 0.3
+        self.diffusion_b = 0.1
+        # self.m_a = 20
+        # self.m_b = 20
 
-        self.max_iter = 1000
+        self.max_iter = 100
         self.map_A_pheno = np.zeros(self.D.shape)
         self.map_B_pheno = np.zeros(self.D.shape)
 
@@ -320,25 +292,16 @@ class YeastMatching():
 
         return chosen
 
-    def agent_update_matrix(self, A):
-        """
-        A: 2D matrix, choose one column for each row
-        returns:
-            final_idx: chosen column index for each row
-            final_vals: chosen value for each row
-        """
-        n_rows, n_cols = A.shape
+    def random_argmax_fast(self, arr):
+        arr = np.asarray(arr)
+        row_max = arr.max(axis=1, keepdims=True)
+        mask = arr == row_max
 
-        max_vals = np.max(A, axis=1)
-        argmax_idx = np.argmax(A, axis=1)
+        row_index = np.array([
+            np.random.choice(np.flatnonzero(row_mask))
+            for row_mask in mask])
 
-        rand_idx = np.random.randint(0, n_cols, size=n_rows)
-        use_max = max_vals > self.response_threshold
-
-        final_idx = np.where(use_max, argmax_idx, rand_idx)
-        final_vals = A[np.arange(n_rows), final_idx]
-
-        return final_idx, final_vals
+        return row_index, row_max.flatten()
 
     def simulate_pairing(self, map_A_pheno, map_B_pheno,):
         """
@@ -370,23 +333,31 @@ class YeastMatching():
             # only active A rows choose
             active_A_idx = np.where(active_A)[0]
             if len(active_A_idx) > 0 and active_B.any():
-                chosen_B_local, sensed_B = self.agent_update_matrix(A_view_for_choice[active_A_idx, :])
+                chosen_B_local, sensed_B = self.random_argmax_fast(A_view_for_choice[active_A_idx, :])
+                # chosen_B_local, sensed_B = self.agent_update_matrix(A_view_for_choice[active_A_idx, :])
 
                 updated_A_map = np.zeros_like(map_A_pheno) + self.decay
 
                 chosen_B = chosen_B_local
                 row_idx = active_A_idx
 
-                # add released signal only to chosen targets
-                new_pheno_A = diffusion_1d(
+                # # add released signal only to chosen targets
+                # new_pheno_A = distance_concentration_kernel(
+                #     self.D[row_idx, chosen_B],
+                #     t=1,
+                #     D=self.diffusion_b,
+                #     M=reaction(sensed_B)*self.m_a,
+                # )
+                sensed_B_diff = distance_concentration_kernel(
                     self.D[row_idx, chosen_B],
-                    t=1,
-                    D=self.diffusion_b,
-                    M=reaction(sensed_B)*self.m_a,
+                    spread=self.diffusion_b,
+                    amplitude=sensed_B,
                 )
+                sensed_B_diff[sensed_B_diff <= 0] = 1e-3
+                new_pheno_A = reaction(sensed_B_diff, kd=0.1)
 
                 updated_A_map[row_idx, chosen_B] += new_pheno_A
-
+                # print("step: ", step, "    sensed_B: ",new_pheno_A, "new_pheno_A")
                 # optionally stop decay on invalid positions:
                 updated_A_map[~valid_mask] = 0
 
@@ -400,7 +371,7 @@ class YeastMatching():
             active_B_idx = np.where(active_B)[0]
             if len(active_B_idx) > 0 and active_A.any():
                 # transpose so each B is now a row
-                chosen_A_local, sensed_A = self.agent_update_matrix(
+                chosen_A_local, sensed_A = self.random_argmax_fast(
                     B_view_for_choice[:, active_B_idx].T)
 
                 updated_B_map = np.zeros_like(map_B_pheno) + self.decay
@@ -408,15 +379,22 @@ class YeastMatching():
                 col_idx = active_B_idx
                 chosen_A = chosen_A_local
 
-                new_pheno_B = diffusion_1d(
+                # new_pheno_B = diffusion_1d(
+                #     self.D[chosen_A, col_idx],
+                #     t=1,
+                #     D=self.diffusion_a,
+                #     M=reaction(sensed_A)*self.m_b,
+                # )
+                sensed_A_diff = distance_concentration_kernel(
                     self.D[chosen_A, col_idx],
-                    t=1,
-                    D=self.diffusion_a,
-                    M=reaction(sensed_A)*self.m_b,
+                    spread=self.diffusion_a,
+                    amplitude=sensed_A,
                 )
+                sensed_A_diff[sensed_A_diff <= 0] = 1e-3
+                new_pheno_B = reaction(sensed_A_diff, kd=0.1)
 
                 updated_B_map[chosen_A, col_idx] += new_pheno_B
-
+                # print("step: ", step, "    sensed_A: ",sensed_A, "new_pheno_B: ", new_pheno_B)
                 # optionally stop decay on invalid positions:
                 updated_B_map[~valid_mask] = 0
 
@@ -452,8 +430,8 @@ class YeastMatching():
         return dict(committed_pairs)
 
     def matching(self):
-        self.map_A_pheno = diffusion_1d(self.D, t=1)
-        self.map_B_pheno = diffusion_1d(self.D, t=1)
+        self.map_A_pheno = np.zeros(self.D.shape) # distance_concentration_kernel(self.D, self.diffusion_a, 1)  # np.zeros(self.D.shape)
+        self.map_B_pheno = distance_concentration_kernel(self.D, self.diffusion_b, 1)
         committed_pairs = self.simulate_pairing(self.map_A_pheno, self.map_B_pheno)
         return committed_pairs
 
@@ -488,6 +466,16 @@ class Evaluator():
     def matching_edges(self, match):
         return set((int(i), int(j)) for i, j in match.items())
 
+    def mean_lower_percent(self, x, percent=0.9):
+        x = np.asarray(x)
+        n = len(x)
+        k = int(np.ceil(n * percent))  # number to keep (lowest 80%)
+
+        x_sorted = np.sort(x)
+        low = x_sorted[:k]
+
+        return np.mean(low)
+
     def metric(self, match):
         D = self.D
         dists = self.extract_matched_distances(match, D)
@@ -505,6 +493,7 @@ class Evaluator():
             "B_coverage": K_curr / nB if nB > 0 else 0.0,
             "total_distance": C_curr,
             "avg_distance": float(dists.mean()) if K_curr else np.nan,
+            "avg_distance_90": self.mean_lower_percent(dists),
             "median_distance": float(np.median(dists)) if K_curr else np.nan,
             "std_distance": float(dists.std()) if K_curr else np.nan,
             "cardinality_gap":  self.K_opt - K_curr,
@@ -517,138 +506,3 @@ class Evaluator():
             "f1_vs_opt": f1,
         }
         return mec
-
-# =========================================================
-# One trial
-# =========================================================
-
-# def run_one_trial(cfg: MatchConfig, rng: np.random.Generator) -> Dict[str, Dict]:
-#     A = generate_agents(cfg.n_agents_per_side, rng)
-#     B = generate_agents(cfg.n_agents_per_side, rng)
-#     D = pairwise_dist(A, B)
-#     visible_mask = mask_by_radius(D, cfg.sensing_radius)
-
-#     # Global optimal
-#     optimal = optimal_matching(D, visible_mask)
-#     optimal_cost = matching_cost(optimal, D)
-
-#     # Baselines + your policy
-#     methods = {
-#         "random": random_matching(D, visible_mask, rng),
-#         "greedy": greedy_nearest_matching(D, visible_mask),
-#         "yeast_policy": yeast_policy_pairing(
-#             A=A,
-#             B=B,
-#             distance=D,
-#             rng=rng,
-#             # Theta=Theta,
-#             # visible_mask=visible_mask,
-#             # score_fn=local_policy_matching,
-#             # conflict_mode="mutual_best",
-#         ),
-#     }
-
-#     out = {}
-#     for name, match in methods.items():
-#         cost = matching_cost(match, D)
-#         out[name] = {
-#             "cost": cost,
-#             "cost_ratio": cost / optimal_cost if optimal_cost > 0 else np.nan,
-#             "accuracy": exact_match_accuracy(match, optimal, cfg.n_agents_per_side),
-#             "unmatched_fraction": unmatched_fraction(match, cfg.n_agents_per_side),
-#             "topk": topk_hit_rates(match, D, visible_mask, cfg.topk_list),
-#             "n_matches": len(match),
-#         }
-
-#     out["optimal"] = {
-#         "cost": optimal_cost,
-#         "cost_ratio": 1.0,
-#         "accuracy": 1.0,
-#         "unmatched_fraction": 0.0,
-#         "topk": {k: 1.0 for k in cfg.topk_list},
-#         "n_matches": len(optimal),
-#     }
-
-#     return out
-
-
-# # =========================================================
-# # Multi-trial benchmark
-# # =========================================================
-
-# def summarize_trials(trial_results: List[Dict[str, Dict]], topk_list=(1, 2, 3, 5)) -> Dict[str, Dict]:
-#     methods = trial_results[0].keys()
-#     summary = {}
-
-#     for method in methods:
-#         cost = np.array([r[method]["cost"] for r in trial_results], dtype=float)
-#         cost_ratio = np.array([r[method]["cost_ratio"] for r in trial_results], dtype=float)
-#         accuracy = np.array([r[method]["accuracy"] for r in trial_results], dtype=float)
-#         unmatched = np.array([r[method]["unmatched_fraction"] for r in trial_results], dtype=float)
-#         n_matches = np.array([r[method]["n_matches"] for r in trial_results], dtype=float)
-
-#         topk_summary = {}
-#         for k in topk_list:
-#             arr = np.array([r[method]["topk"][k] for r in trial_results], dtype=float)
-#             topk_summary[k] = {
-#                 "mean": float(np.mean(arr)),
-#                 "std": float(np.std(arr)),
-#             }
-
-#         summary[method] = {
-#             "cost_mean": float(np.mean(cost)),
-#             "cost_std": float(np.std(cost)),
-#             "cost_ratio_mean": float(np.mean(cost_ratio)),
-#             "cost_ratio_std": float(np.std(cost_ratio)),
-#             "accuracy_mean": float(np.mean(accuracy)),
-#             "accuracy_std": float(np.std(accuracy)),
-#             "unmatched_mean": float(np.mean(unmatched)),
-#             "unmatched_std": float(np.std(unmatched)),
-#             "n_matches_mean": float(np.mean(n_matches)),
-#             "n_matches_std": float(np.std(n_matches)),
-#             "topk": topk_summary,
-#         }
-
-#     return summary
-
-
-# def print_summary(summary: Dict[str, Dict], topk_list=(1, 2, 3, 5)) -> None:
-#     for method, stats in summary.items():
-#         print(f"\n=== {method} ===")
-#         print(f"cost              : {stats['cost_mean']:.3f} ± {stats['cost_std']:.3f}")
-#         print(f"cost ratio        : {stats['cost_ratio_mean']:.3f} ± {stats['cost_ratio_std']:.3f}")
-#         print(f"exact match acc   : {stats['accuracy_mean']:.3f} ± {stats['accuracy_std']:.3f}")
-#         print(f"unmatched frac    : {stats['unmatched_mean']:.3f} ± {stats['unmatched_std']:.3f}")
-#         print(f"n matches         : {stats['n_matches_mean']:.2f} ± {stats['n_matches_std']:.2f}")
-#         for k in topk_list:
-#             print(f"top-{k} hit rate      : {stats['topk'][k]['mean']:.3f} ± {stats['topk'][k]['std']:.3f}")
-
-
-# def run_benchmark(cfg: SimConfig) -> Dict[str, Dict]:
-#     rng = np.random.default_rng(cfg.seed)
-#     trial_results = []
-
-#     for _ in range(cfg.n_trials):
-#         res = run_one_trial(cfg, rng)
-#         trial_results.append(res)
-
-#     summary = summarize_trials(trial_results, cfg.topk_list)
-#     print_summary(summary, cfg.topk_list)
-#     return summary
-
-
-# =========================================================
-# Main
-# =========================================================
-
-# if __name__ == "__main__":
-#     cfg = SimConfig(
-#         n_agents_per_side=50,
-#         box_size=100.0,
-#         n_trials=100,
-#         sensing_radius=None,   # try e.g. 30.0 for local visibility
-#         topk_list=(1, 2, 3, 5),
-#         seed=42,
-#     )
-
-#     summary = run_benchmark(cfg)
