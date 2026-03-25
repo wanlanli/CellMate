@@ -226,6 +226,303 @@ def greedy_rowwise_matching(D: np.ndarray, visible: np.ndarray, row_order: Optio
         available_B.remove(j_best)
     return match_A_to_B
 
+import numpy as np
+
+
+def _prepare_visible_mask(D, visible_mask=None):
+    D = np.asarray(D, dtype=float)
+    if visible_mask is None:
+        visible_mask = np.ones_like(D, dtype=bool)
+    else:
+        visible_mask = np.asarray(visible_mask, dtype=bool)
+        if visible_mask.shape != D.shape:
+            raise ValueError("visible_mask must have the same shape as D")
+    return D, visible_mask
+
+
+def _argmin_random_tie(cost_row):
+    """
+    cost_row: 1D array, smaller is better, inf means invalid
+    returns chosen index, or -1 if no finite entry exists
+    """
+    finite = np.isfinite(cost_row)
+    if not finite.any():
+        return -1
+    min_val = np.min(cost_row[finite])
+    candidates = np.where(cost_row == min_val)[0]
+    return int(np.random.choice(candidates))
+
+
+def _active_cost_matrix(D, visible_mask, active_A, active_B):
+    """
+    invalid / inactive edges -> inf
+    """
+    valid = np.outer(active_A, active_B) & visible_mask
+    return np.where(valid, D, np.inf)
+
+
+def local_nearest_neighbor(D, visible_mask=None):
+    """
+    Each active A proposes to its nearest visible active B.
+    Each B accepts the nearest proposer.
+    Repeat until no more matches can be made.
+
+    Returns
+    -------
+    dict {a_idx: b_idx}
+    """
+    D, visible_mask = _prepare_visible_mask(D, visible_mask)
+    nA, nB = D.shape
+
+    active_A = np.ones(nA, dtype=bool)
+    active_B = np.ones(nB, dtype=bool)
+    matches = {}
+
+    while active_A.any() and active_B.any():
+        cost = _active_cost_matrix(D, visible_mask, active_A, active_B)
+
+        # Each active A chooses nearest active visible B
+        proposals = {}  # b -> list of a
+        any_proposal = False
+
+        for i in np.where(active_A)[0]:
+            j = _argmin_random_tie(cost[i])
+            if j >= 0:
+                proposals.setdefault(j, []).append(i)
+                any_proposal = True
+
+        if not any_proposal:
+            break
+
+        new_pairs = []
+        for j, proposers in proposals.items():
+            # B accepts the proposer with smallest D[i, j]
+            dvals = np.array([D[i, j] for i in proposers], dtype=float)
+            min_d = np.min(dvals)
+            best_candidates = [i for i in proposers if D[i, j] == min_d]
+            i_star = int(np.random.choice(best_candidates))
+            new_pairs.append((i_star, j))
+
+        if not new_pairs:
+            break
+
+        # Commit all non-conflicting pairs (they should already be unique in j;
+        # i is also unique because each A proposes once)
+        for i, j in new_pairs:
+            if active_A[i] and active_B[j]:
+                matches[i] = j
+                active_A[i] = False
+                active_B[j] = False
+
+    return matches
+
+def mutual_nearest_neighbor(D, visible_mask=None):
+    """
+    Match only mutual nearest neighbors among currently active agents.
+
+    Returns
+    -------
+    dict {a_idx: b_idx}
+    """
+    D, visible_mask = _prepare_visible_mask(D, visible_mask)
+    nA, nB = D.shape
+
+    active_A = np.ones(nA, dtype=bool)
+    active_B = np.ones(nB, dtype=bool)
+    matches = {}
+
+    while active_A.any() and active_B.any():
+        cost = _active_cost_matrix(D, visible_mask, active_A, active_B)
+
+        chosen_B = np.full(nA, -1, dtype=int)
+        for i in np.where(active_A)[0]:
+            chosen_B[i] = _argmin_random_tie(cost[i])
+
+        chosen_A = np.full(nB, -1, dtype=int)
+        for j in np.where(active_B)[0]:
+            chosen_A[j] = _argmin_random_tie(cost[:, j])
+
+        new_pairs = []
+        for i in np.where(active_A)[0]:
+            j = chosen_B[i]
+            if j >= 0 and active_B[j] and chosen_A[j] == i:
+                new_pairs.append((i, j))
+
+        if not new_pairs:
+            break
+
+        # They should already be conflict-free by construction,
+        # but keep safety checks.
+        used_A = set()
+        used_B = set()
+        committed = []
+        for i, j in new_pairs:
+            if i not in used_A and j not in used_B and active_A[i] and active_B[j]:
+                committed.append((i, j))
+                used_A.add(i)
+                used_B.add(j)
+
+        if not committed:
+            break
+
+        for i, j in committed:
+            matches[i] = j
+            active_A[i] = False
+            active_B[j] = False
+
+    return matches
+
+
+def thresholded_local_commitment(D, distance_threshold, visible_mask=None):
+    """
+    Instant local commitment:
+    An agent only commits if its nearest visible partner is within threshold,
+    and commitment happens only for mutual choices.
+
+    Parameters
+    ----------
+    distance_threshold : float
+        Smaller than this threshold means acceptable local commitment.
+
+    Returns
+    -------
+    dict {a_idx: b_idx}
+    """
+    D, visible_mask = _prepare_visible_mask(D, visible_mask)
+    nA, nB = D.shape
+
+    active_A = np.ones(nA, dtype=bool)
+    active_B = np.ones(nB, dtype=bool)
+    matches = {}
+
+    while active_A.any() and active_B.any():
+        cost = _active_cost_matrix(D, visible_mask, active_A, active_B)
+
+        chosen_B = np.full(nA, -1, dtype=int)
+        A_accept = np.zeros(nA, dtype=bool)
+
+        for i in np.where(active_A)[0]:
+            j = _argmin_random_tie(cost[i])
+            if j >= 0:
+                chosen_B[i] = j
+                A_accept[i] = (D[i, j] <= distance_threshold)
+
+        chosen_A = np.full(nB, -1, dtype=int)
+        B_accept = np.zeros(nB, dtype=bool)
+
+        for j in np.where(active_B)[0]:
+            i = _argmin_random_tie(cost[:, j])
+            if i >= 0:
+                chosen_A[j] = i
+                B_accept[j] = (D[i, j] <= distance_threshold)
+
+        new_pairs = []
+        for i in np.where(active_A)[0]:
+            j = chosen_B[i]
+            if (
+                j >= 0
+                and active_B[j]
+                and A_accept[i]
+                and chosen_A[j] == i
+                and B_accept[j]
+            ):
+                new_pairs.append((i, j))
+
+        if not new_pairs:
+            break
+
+        for i, j in new_pairs:
+            if active_A[i] and active_B[j]:
+                matches[i] = j
+                active_A[i] = False
+                active_B[j] = False
+
+    return matches
+
+
+def asynchronous_nearest_neighbor(
+    D,
+    visible_mask=None,
+    max_steps=10000,
+    patience=None,
+):
+    """
+    Asynchronous decentralized nearest-neighbor matching.
+    At each step, randomly pick one active agent (from A or B).
+    It proposes to its nearest visible active partner.
+    If the partner also sees it as nearest, they commit immediately.
+
+    Parameters
+    ----------
+    max_steps : int
+        Hard stop for simulation.
+    patience : int or None
+        Stop if no new match has occurred for this many steps.
+        If None, defaults to 5 * (nA + nB).
+
+    Returns
+    -------
+    dict {a_idx: b_idx}
+    """
+    D, visible_mask = _prepare_visible_mask(D, visible_mask)
+    nA, nB = D.shape
+
+    active_A = np.ones(nA, dtype=bool)
+    active_B = np.ones(nB, dtype=bool)
+    matches = {}
+
+    if patience is None:
+        patience = 5 * (nA + nB)
+
+    no_progress = 0
+
+    for _ in range(max_steps):
+        if not active_A.any() or not active_B.any():
+            break
+        if no_progress >= patience:
+            break
+
+        side_choices = []
+        if active_A.any():
+            side_choices.append("A")
+        if active_B.any():
+            side_choices.append("B")
+        side = np.random.choice(side_choices)
+
+        cost = _active_cost_matrix(D, visible_mask, active_A, active_B)
+        made_match = False
+
+        if side == "A":
+            i = int(np.random.choice(np.where(active_A)[0]))
+            j = _argmin_random_tie(cost[i])
+            if j >= 0:
+                # check whether i is also B_j's nearest
+                i_back = _argmin_random_tie(cost[:, j])
+                if i_back == i and active_B[j]:
+                    matches[i] = j
+                    active_A[i] = False
+                    active_B[j] = False
+                    made_match = True
+
+        else:  # side == "B"
+            j = int(np.random.choice(np.where(active_B)[0]))
+            i = _argmin_random_tie(cost[:, j])
+            if i >= 0:
+                # check whether j is also A_i's nearest
+                j_back = _argmin_random_tie(cost[i])
+                if j_back == j and active_A[i]:
+                    matches[i] = j
+                    active_A[i] = False
+                    active_B[j] = False
+                    made_match = True
+
+        if made_match:
+            no_progress = 0
+        else:
+            no_progress += 1
+
+    return matches
+
 
 # =========================================================
 # Yeast local policy template
