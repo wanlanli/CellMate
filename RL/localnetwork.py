@@ -653,13 +653,13 @@ class YeastMatching():
                 sensed_B_diff[sensed_B_diff <= 0] = 1e-3
                 new_pheno_A = reaction(sensed_B_diff, kd=0.1)
 
-                updated_A_map[row_idx, chosen_B] += new_pheno_A
+                updated_A_map[row_idx, chosen_B] += 0.5# new_pheno_A
                 # print("step: ", step, "    sensed_B: ",new_pheno_A, "new_pheno_A")
                 # optionally stop decay on invalid positions:
                 updated_A_map[~valid_mask] = 0
 
-                map_A_pheno += updated_A_map
-                map_A_pheno = np.clip(map_A_pheno, 0, None)
+                # map_A_pheno += updated_A_map
+                # map_A_pheno = np.clip(map_A_pheno, 0, None)
 
             # -------- B update --------
             # each active B chooses one active A
@@ -690,10 +690,14 @@ class YeastMatching():
                 sensed_A_diff[sensed_A_diff <= 0] = 1e-3
                 new_pheno_B = reaction(sensed_A_diff, kd=0.1)
 
-                updated_B_map[chosen_A, col_idx] += new_pheno_B
+                updated_B_map[chosen_A, col_idx] += 0.5 # new_pheno_B
                 # print("step: ", step, "    sensed_A: ",sensed_A, "new_pheno_B: ", new_pheno_B)
                 # optionally stop decay on invalid positions:
                 updated_B_map[~valid_mask] = 0
+
+
+                map_A_pheno += updated_A_map
+                map_A_pheno = np.clip(map_A_pheno, 0, None)
 
                 map_B_pheno += updated_B_map
                 map_B_pheno = np.clip(map_B_pheno, 0, None)
@@ -727,8 +731,8 @@ class YeastMatching():
         return dict(committed_pairs)
 
     def matching(self):
-        self.map_A_pheno = np.zeros(self.D.shape) # distance_concentration_kernel(self.D, self.diffusion_a, 1)  # np.zeros(self.D.shape)
-        self.map_B_pheno = distance_concentration_kernel(self.D, self.diffusion_b, 1)
+        self.map_A_pheno = distance_concentration_kernel(self.D, self.diffusion_a, 0.1) # np.zeros(self.D.shape) # distance_concentration_kernel(self.D, self.diffusion_a, 1)  # np.zeros(self.D.shape)
+        self.map_B_pheno = distance_concentration_kernel(self.D, self.diffusion_b, 0.1)
         committed_pairs = self.simulate_pairing(self.map_A_pheno, self.map_B_pheno)
         return committed_pairs
 
