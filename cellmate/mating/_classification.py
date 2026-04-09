@@ -51,12 +51,12 @@ class FluorescentClassification():
             x = self.data['ch_%d' % i] - self.data['bg_%d' % i]
             x[x <= 0] = 1e-6
             x = np.log(x)/np.log(self.data['bg_%d' % i])
-            x[x <= 1] = 1
+            x[x <= 0] = 0
             # x
             self.data['ch_%d_norm' % i] = x #np.log(x)/np.log(self.data['bg_%d' % i])
         return self.data
 
-    def prediction_data_type(self):
+    def prediction_data_type(self, high_val=0.8):
         self.data = self.normalize_intensity()
         self.data = self.data.dropna()
         # data = self.data[['ch%d_norm' % i for i in range(0, self.channel_number)]]
@@ -69,14 +69,14 @@ class FluorescentClassification():
         # return data_pred, clustering
         label_chs = 0
         for i in range(0, self.channel_number):
-            label_i = single_channel_prediction(self.data['ch_%d_norm' % i])
+            label_i = single_channel_prediction(self.data['ch_%d_norm' % i], high_val=high_val)
             self.data["ch_%d_prediction" % i] = label_i
             label_chs += label_i*2**i
         self.data["channel_prediction"] = label_chs
         return self.data
 
-    def prediction_by_label(self):
-        _ = self.prediction_data_type()
+    def prediction_by_label(self, high_val=0.8):
+        _ = self.prediction_data_type(high_val=high_val)
         # pred = self.data.groupby('label')['channel_prediction'].agg(pd.Series.mode)
         pred = (
                 self.data
@@ -109,7 +109,7 @@ def __get_bounding_points(data):
     return out
 
 
-def background(fluorescent_image, masks, threshold: float = 10) -> np.array:
+def background(fluorescent_image, masks, threshold: float = 10, region="background") -> np.array:
     """
     Get the background threshold for every channel.
 
@@ -123,10 +123,19 @@ def background(fluorescent_image, masks, threshold: float = 10) -> np.array:
     bg_threshold: np.array with shape [frame x number of channels]
         An array containing background thresholds for each frame and channel.
     """
-    if fluorescent_image.ndim == 3:
-        masked = fluorescent_image*((masks == 0)[:, :, None])
+    if region not in ["background", "cell"]:
+        raise ValueError("region must be 'background' or 'cell'")
+
+    # choose mask condition
+    if region == "background":
+        mask_condition = (masks == 0)
     else:
-        masked = fluorescent_image*((masks == 0)[:, None, :, :])
+        mask_condition = (masks != 0)
+
+    if fluorescent_image.ndim == 3:
+        masked = fluorescent_image*(mask_condition[:, :, None])
+    else:
+        masked = fluorescent_image*(mask_condition[:, None, :, :])
     channel_number = fluorescent_image.shape[1]
     bg_threshold = np.zeros((fluorescent_image.shape[0],  channel_number))
     for i in range(0, channel_number):
@@ -180,11 +189,12 @@ def flatten_nonzero_value(data):
     return flatten
 
 
-def prediction_cell_type(fluorescent_image, masks, channel_number=2, bg_threshold=10, fc_threshold=50):
-    bg = background(fluorescent_image, masks, threshold=bg_threshold)
+def prediction_cell_type(fluorescent_image, masks, channel_number=2, bg_threshold=10, bg_region="background", fc_threshold=50, high_val=0.8):
+    print(high_val)
+    bg = background(fluorescent_image, masks, threshold=bg_threshold, region=bg_region)
     data = instance_fluorescent_intensity(fluorescent_image, masks, bg, measure_line=fc_threshold)
     fc = FluorescentClassification(data, channel_number=channel_number)
-    cell_types = fc.prediction_by_label()
+    cell_types = fc.prediction_by_label(high_val=high_val)
     return cell_types, fc.data
 
 
