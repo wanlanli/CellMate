@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 
-def get_mating_feature(cellnet):
+def get_mating_feature(cellnet, time_step: int = 10):
     fusion_cells = cellnet.fusion_cells()
     fusion_data_table = None
     group_index = 0
@@ -24,7 +24,7 @@ def get_mating_feature(cellnet):
         fcell = cellnet.cells[key]
         parents = fcell.parents
         print(parents)
-        data = cellnet.potential_mating_feature(parents)
+        data = cellnet.potential_mating_feature(parents, time_step=time_step)
         if data is None:
             continue
         group_index += 1
