@@ -3,6 +3,8 @@ from skimage import morphology
 import scipy.ndimage as ndi
 import pandas as pd
 from tqdm import trange
+from ._classification import FluorescentClassification
+
 
 
 def fluorescent_intensity_h90_single(fluorescent_image, mask, erosion_k=13, dilation_k=1, conv_k=17):
@@ -152,6 +154,13 @@ def get_intensity_table(fluorescent_image, tracked_image, kernel=None, *args, **
         data["frame"] = frame_number
         data_sheet = pd.concat([data_sheet, data])
     return data_sheet
+
+
+def prediction_cell_type_h90switch(fluorescent_image, masks, high_val=0.8):
+    data = get_intensity_table(fluorescent_image, masks)
+    fc = FluorescentClassification(data, channel_number=1)
+    cell_types = fc.prediction_by_label(high_val=high_val)
+    return cell_types, fc.data
 
 
 def dot_detector_kernel(radius=10):

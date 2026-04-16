@@ -543,9 +543,9 @@ class YeastMatching():
 
         self.commit_threshold = 3
         # self.response_threshold = 0.1
-        self.decay = -0.01
+        self.decay = -0.2
 
-        self.diffusion_a = 0.3
+        self.diffusion_a = 0.05
         self.diffusion_b = 0.1
         # self.m_a = 20
         # self.m_b = 20
@@ -605,10 +605,6 @@ class YeastMatching():
         Iteratively update A/B pheromone maps and commit pairs.
         Committed A and B are removed from future consideration.
         """
-
-        # map_A_pheno = map_A_pheno.copy()
-        # map_B_pheno = map_B_pheno.copy()
-
         nA, nB = map_A_pheno.shape
 
         active_A = np.ones(nA, dtype=bool)
@@ -639,12 +635,6 @@ class YeastMatching():
                 row_idx = active_A_idx
 
                 # # add released signal only to chosen targets
-                # new_pheno_A = distance_concentration_kernel(
-                #     self.D[row_idx, chosen_B],
-                #     t=1,
-                #     D=self.diffusion_b,
-                #     M=reaction(sensed_B)*self.m_a,
-                # )
                 # sensed_B_diff = distance_concentration_kernel(
                 #     self.D[row_idx, chosen_B],
                 #     spread=self.diffusion_b,
@@ -652,7 +642,7 @@ class YeastMatching():
                 # )
                 sensed_B_diff = sensed_B.copy()
                 sensed_B_diff[sensed_B_diff <= 0] = 1e-3
-                new_pheno_A = reaction(sensed_B_diff, kd=0.1)
+                new_pheno_A = reaction(sensed_B_diff, kd=0.01)
 
                 updated_A_map[row_idx, chosen_B] += new_pheno_A
                 # print("step: ", step, "    sensed_B: ",new_pheno_A, "new_pheno_A")
@@ -677,12 +667,6 @@ class YeastMatching():
                 col_idx = active_B_idx
                 chosen_A = chosen_A_local
 
-                # new_pheno_B = diffusion_1d(
-                #     self.D[chosen_A, col_idx],
-                #     t=1,
-                #     D=self.diffusion_a,
-                #     M=reaction(sensed_A)*self.m_b,
-                # )
                 # sensed_A_diff = distance_concentration_kernel(
                 #     self.D[chosen_A, col_idx],
                 #     spread=self.diffusion_a,
@@ -690,7 +674,7 @@ class YeastMatching():
                 # )
                 sensed_A_diff = sensed_A.copy()
                 sensed_A_diff[sensed_A_diff <= 0] = 1e-3
-                new_pheno_B = reaction(sensed_A_diff, kd=0.1)
+                new_pheno_B = reaction(sensed_A_diff, kd=0.01)
 
                 updated_B_map[chosen_A, col_idx] += new_pheno_B
                 # print("step: ", step, "    sensed_A: ",sensed_A, "new_pheno_B: ", new_pheno_B)

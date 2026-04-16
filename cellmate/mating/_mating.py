@@ -5,6 +5,7 @@ from tqdm import trange
 from cellmate.image_measure import ImageMeasure
 from ._cell import Cell
 from ._classification import prediction_cell_type
+from ._classification90 import prediction_cell_type_h90switch
 from cellmate.configs import DIVISION
 import numpy as np
 
@@ -313,7 +314,6 @@ def is_mated_in_new_tip(tips_start, tips_end, point_start, point_end):
 
 
 
-
 class CellNetwork90(CellNetwork):
     def __init__(self, image, time_network, tracker, threshold,  *args, **kwargs) -> None:
         super().__init__(image, time_network, tracker, threshold,  *args, **kwargs)
@@ -343,3 +343,12 @@ class CellNetwork90(CellNetwork):
                     data.loc[index] = [ref, cell_ref.strain_type, flag]+feature
                     index += 1
         return data
+
+    def create_cell_type(self, fluorescent_image, mask=None, *arg, **kwargs):
+        if mask is None:
+            mask = self.image
+        cell_pred, data = prediction_cell_type_h90switch(fluorescent_image, mask, *arg, **kwargs)
+        type_maps = cell_pred.to_dict()
+        for k, v in type_maps.items():
+            self.cells[k % DIVISION].strain_type = v
+        self.fluorescent_intensity = data
