@@ -645,15 +645,16 @@ class YeastMatching():
                 #     D=self.diffusion_b,
                 #     M=reaction(sensed_B)*self.m_a,
                 # )
-                sensed_B_diff = distance_concentration_kernel(
-                    self.D[row_idx, chosen_B],
-                    spread=self.diffusion_b,
-                    amplitude=sensed_B,
-                )
+                # sensed_B_diff = distance_concentration_kernel(
+                #     self.D[row_idx, chosen_B],
+                #     spread=self.diffusion_b,
+                #     amplitude=sensed_B,
+                # )
+                sensed_B_diff = sensed_B.copy()
                 sensed_B_diff[sensed_B_diff <= 0] = 1e-3
                 new_pheno_A = reaction(sensed_B_diff, kd=0.1)
 
-                updated_A_map[row_idx, chosen_B] += 0.5# new_pheno_A
+                updated_A_map[row_idx, chosen_B] += new_pheno_A
                 # print("step: ", step, "    sensed_B: ",new_pheno_A, "new_pheno_A")
                 # optionally stop decay on invalid positions:
                 updated_A_map[~valid_mask] = 0
@@ -682,15 +683,16 @@ class YeastMatching():
                 #     D=self.diffusion_a,
                 #     M=reaction(sensed_A)*self.m_b,
                 # )
-                sensed_A_diff = distance_concentration_kernel(
-                    self.D[chosen_A, col_idx],
-                    spread=self.diffusion_a,
-                    amplitude=sensed_A,
-                )
+                # sensed_A_diff = distance_concentration_kernel(
+                #     self.D[chosen_A, col_idx],
+                #     spread=self.diffusion_a,
+                #     amplitude=sensed_A,
+                # )
+                sensed_A_diff = sensed_A.copy()
                 sensed_A_diff[sensed_A_diff <= 0] = 1e-3
                 new_pheno_B = reaction(sensed_A_diff, kd=0.1)
 
-                updated_B_map[chosen_A, col_idx] += 0.5 # new_pheno_B
+                updated_B_map[chosen_A, col_idx] += new_pheno_B
                 # print("step: ", step, "    sensed_A: ",sensed_A, "new_pheno_B: ", new_pheno_B)
                 # optionally stop decay on invalid positions:
                 updated_B_map[~valid_mask] = 0
