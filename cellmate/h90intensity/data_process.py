@@ -202,3 +202,61 @@ def smooth_normalize(data_sheet):
         data_sheet.loc[current_mask, "slope_mb"] = slope_mb
         data_sheet.loc[current_mask, "slope_marker"] = slope_mb >= slope_nc
     return data_sheet
+
+
+import numpy as np
+from scipy import ndimage as ndi
+
+
+def region_stat(values, method=80):
+    values = values[values > 0]
+    return np.percentile(values, method)
+
+
+def classify_cells_edge_center(img, label_mask, erosion_iter=20):
+    results = []
+
+    labels = np.unique(label_mask)
+    labels = labels[labels != 0]
+
+    for lab in labels:
+        cell = (label_mask == lab)
+
+        eroded = ndi.binary_erosion(cell, iterations=5)
+        edge = cell & (~eroded)
+
+        center = ndi.binary_erosion(cell, iterations=erosion_iter)
+        ring = eroded & (~center)
+
+        # 防止过度腐蚀导致空区域
+        if edge.sum() == 0 or center.sum() == 0 or ring.sum() == 0:
+            continue
+
+        edge_int = region_stat(img[edge], 80)
+        # inner_int = region_stat(img[eroded], stat) if eroded.sum() > 0 else np.nan
+
+        center_int = region_stat(img[center], 90)
+        ring_int = region_stat(img[ring], 50)
+
+        edge_score = (edge_int - ring_int) / (edge_int + ring_int + 1e-6)
+        center_score = (center_int - ring_int) / (center_int + ring_int + 1e-6)
+
+        if edge_score > 0.1 and edge_score > center_score:
+            cls = 0
+        elif center_score > 0.15 and center_score > edge_score:
+            cls = 1
+        else:
+            cls = 2
+
+        results.append({
+            "label": lab,
+            "edge_int": edge_int,
+            # "inner_int": inner_int,
+            "center_int": center_int,
+            "ring_int": ring_int,
+            "edge_score": edge_score,
+            "center_score": center_score,
+            "class": cls
+        })
+
+    return results

@@ -313,7 +313,6 @@ def is_mated_in_new_tip(tips_start, tips_end, point_start, point_end):
     return (idx0 == idx_end)*1
 
 
-
 class CellNetwork90(CellNetwork):
     def __init__(self, image, time_network, tracker, threshold,  *args, **kwargs) -> None:
         super().__init__(image, time_network, tracker, threshold,  *args, **kwargs)
@@ -324,7 +323,8 @@ class CellNetwork90(CellNetwork):
                    'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
                    'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
                    'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
-                   'center_dist', 'nearest_dist', 'time_stamp']
+                   'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip',
+                   'time_stamp']
         data = pd.DataFrame(None, columns=columns)
         index = 0
         for i, ref in enumerate(parents):
@@ -343,12 +343,3 @@ class CellNetwork90(CellNetwork):
                     data.loc[index] = [ref, cell_ref.strain_type, flag]+feature
                     index += 1
         return data
-
-    def create_cell_type(self, fluorescent_image, mask=None, *arg, **kwargs):
-        if mask is None:
-            mask = self.image
-        cell_pred, data = prediction_cell_type_h90switch(fluorescent_image, mask, *arg, **kwargs)
-        type_maps = cell_pred.to_dict()
-        for k, v in type_maps.items():
-            self.cells[k % DIVISION].strain_type = v
-        self.fluorescent_intensity = data
