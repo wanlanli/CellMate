@@ -257,6 +257,8 @@ class CellNetwork():
     def check_meet_tips(self, cell_id, meet_point, time):
         if self.cells[cell_id].start == 0:
             return 2
+        if self.cells[cell_id].sister is None:
+            return 2
         cell_label = self.label_map[time][cell_id]
         start_tips = np.array(self.measure[time].tip(label=cell_label))
         # tips = self.tips_overtime(cell_id)
