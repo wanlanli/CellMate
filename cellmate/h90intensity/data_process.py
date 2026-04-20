@@ -232,7 +232,7 @@ def classify_cells_edge_center(img, label_mask, erosion_iter=20):
         if edge.sum() == 0 or center.sum() == 0 or ring.sum() == 0:
             continue
 
-        edge_int = region_stat(img[edge], 80)
+        edge_int = region_stat(img[edge], 70)
         # inner_int = region_stat(img[eroded], stat) if eroded.sum() > 0 else np.nan
 
         center_int = region_stat(img[center], 90)
@@ -241,10 +241,10 @@ def classify_cells_edge_center(img, label_mask, erosion_iter=20):
         edge_score = (edge_int - ring_int) / (edge_int + ring_int + 1e-6)
         center_score = (center_int - ring_int) / (center_int + ring_int + 1e-6)
 
-        if edge_score > 0.1 and edge_score > center_score:
-            cls = 0
-        elif center_score > 0.15 and center_score > edge_score:
+        if center_score > 0.15 and center_score > edge_score:
             cls = 1
+        elif edge_score > 0:
+            cls = 0
         else:
             cls = 2
 
@@ -258,5 +258,137 @@ def classify_cells_edge_center(img, label_mask, erosion_iter=20):
             "center_score": center_score,
             "class": cls
         })
-
     return results
+
+
+
+def dominant_class(arr, min_ratio=0.5):
+    """
+    返回数组中占比最高的类别（0或1）。
+    如果最高占比低于 min_ratio，则返回 np.nan
+    """
+    arr = np.asarray(arr)
+    if len(arr) == 0:
+        return np.nan
+
+    vals, counts = np.unique(arr, return_counts=True)
+    idx = np.argmax(counts)
+    major = vals[idx]
+    ratio = counts[idx] / len(arr)
+
+    if ratio >= min_ratio:
+        return int(major)
+    return np.nan
+
+
+def classify_cell(group, frac=0.3, min_ratio=0.6):
+    """
+    对每个 label 的时间序列分类：
+    - stable_0
+    - stable_1
+    - switch_to_0
+    - switch_to_1
+    - other
+    """
+
+    g = group.sort_values('frame')
+
+    # ===== 去掉最后3帧 =====
+    if len(g) > 2:
+        g = g.iloc[:-2]
+
+    cls = g['class'].to_numpy()
+
+    # 去掉未知类 2
+    cls_valid = cls[cls != 2]
+
+    # 如果去掉 2 以后没有信息
+    if len(cls_valid) == 0:
+        return pd.Series({
+            'type': 'other',
+            'strain_type': 3,
+            'n_frames': len(cls),
+            'n_valid': 0
+        })
+
+    # 如果去掉 2 后只剩一种类别 => stable
+    unique_valid = np.unique(cls_valid)
+    if len(unique_valid) == 1:
+        only_class = int(unique_valid[0])
+        return pd.Series({
+            'type': f'stable_{only_class}',
+            'strain_type': only_class+1,
+            'n_frames': len(cls),
+            'n_valid': len(cls_valid)
+        })
+
+    # 前后分段判断趋势
+    n = len(cls_valid)
+    k = max(1, int(n * frac))
+
+    first_part = cls_valid[:k]
+    last_part = cls_valid[-k:]
+
+    first_major = dominant_class(first_part, min_ratio=min_ratio)
+    last_major = dominant_class(last_part, min_ratio=min_ratio)
+
+    # 如果前后主类别判断不出来
+    if pd.isna(first_major) or pd.isna(last_major):
+        return pd.Series({
+            'type': 'other',
+            'strain_type': 3,
+            'n_frames': len(cls),
+            'n_valid': len(cls_valid)
+        })
+
+    # switch
+    if first_major == 0 and last_major == 1:
+        return pd.Series({
+            'type': 'switch_to_1',
+            'strain_type': 2,
+            'n_frames': len(cls),
+            'n_valid': len(cls_valid)
+        })
+
+    if first_major == 1 and last_major == 0:
+        return pd.Series({
+            'type': 'switch_to_0',
+            'strain_type': 1,
+            'n_frames': len(cls),
+            'n_valid': len(cls_valid)
+        })
+
+    # stable
+    if first_major == 0 and last_major == 0:
+        return pd.Series({
+            'type': 'stable_0',
+            'strain_type': 1,
+            'n_frames': len(cls),
+            'n_valid': len(cls_valid)
+        })
+
+    if first_major == 1 and last_major == 1:
+        return pd.Series({
+            'type': 'stable_1',
+            'strain_type': 2,
+            'n_frames': len(cls),
+            'n_valid': len(cls_valid)
+        })
+
+    return pd.Series({
+        'type': 'other',
+        'strain_type': 3,
+        'n_frames': len(cls),
+        'n_valid': len(cls_valid)
+    })
+
+
+def get_cell_type_table(df):
+    df = df.sort_values(['label', 'frame']).copy()
+    df_type = (
+        df.groupby('label', group_keys=False)
+        .apply(classify_cell, frac=0.5, min_ratio=0.5)
+        .reset_index()
+    )
+    df = df.merge(df_type[['label', 'type', 'strain_type']], on='label', how='left')
+    return df

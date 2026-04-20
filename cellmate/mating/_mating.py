@@ -337,7 +337,11 @@ class CellNetwork90(CellNetwork):
             for t in time_table:
                 mating_competent = self.neighbor(node=ref, time=t)
                 for n in mating_competent:
-                    feature = self.pair_feature(ref, n, t)
+                    if i == 0:
+                        feature = self.pair_feature(ref, n, t)
+                    else:
+                        feature = self.pair_feature(n, ref, t)
+                    # feature = self.pair_feature(ref, n, t)
                     if n == parents[1-i]:
                         flag = True
                     else:
