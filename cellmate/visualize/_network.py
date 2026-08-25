@@ -48,6 +48,8 @@ def draw_graph_by_layer(network):
     un_network = network.to_undirected()
     groups = list(nx.connected_components(un_network))
     f, ax = plt.subplots(len(groups), 1, figsize=(12, 5*len(groups)))
+    if len(groups) == 1:
+        ax = [ax]
     for i, g in enumerate(groups):
         subgraph = nx.subgraph(un_network, g)
         pos = nx.bfs_layout(subgraph, start=min(g))
