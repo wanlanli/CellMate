@@ -102,12 +102,44 @@ class BaseTracker():
                                             "frame": tracker[i].frame}
         return tracker_saved
 
-    def to_image_auto_fill_miss(self, is_keep_middle=False):
+    def to_image_auto_fill_miss(self, is_keep_middle=False, return_report=False):
+        """
+        Like `to_image`, but additionally fills short gaps in a tracked
+        object's history (frames where it went undetected, e.g. briefly out
+        of focus) by carrying over the overlapping region between the mask
+        just before and just after the gap -- so a track doesn't have holes
+        in the middle of an otherwise continuous lifetime.
+
+        A gap is only filled when the before/after masks overlap enough
+        (IoU > 0.8) to trust that it's the same object rather than
+        coincidence, and when the target region isn't already claimed by
+        another tracked object. Gaps that fail either check are left as-is.
+
+        Parameters:
+        -----------
+        is_keep_middle: bool, passed through to `to_image`.
+        return_report: bool, optional (default False)
+            If True, also return a list of dicts, one per gap this method
+            attempted to fill: {"id", "start", "end", "iou", "filled",
+            "reason"} (`reason` is None when `filled` is True). Existing
+            callers that don't pass this keep getting the original 2-tuple.
+
+        Returns:
+        -----------
+        (traced_image, traced_image_filled) normally, or
+        (traced_image, traced_image_filled, report) if `return_report=True`.
+        """
+        tracker = self.tracker_end + self.trackers
+        report = []
+        if len(tracker) < 1:
+            # `to_image()` would itself return None here, which can't be
+            # `.copy()`-ed below -- return the same shape callers already
+            # unpack (`_, x = ...()`) instead of crashing.
+            empty = (None, None)
+            return (*empty, report) if return_report else empty
+
         traced_image = self.to_image()
         traced_image_filled = traced_image.copy()
-        tracker = self.tracker_end + self.trackers
-        if len(tracker) < 1:
-            return None
         for i in range(len(tracker)):
             if tracker[i].life_time() < self.min_hist:
                 continue
@@ -140,8 +172,16 @@ class BaseTracker():
                     for m_f in range(start+1, end):
                         if (traced_image_filled[m_f][overlap_mask] > 0).sum() < 1000:
                             traced_image_filled[m_f][overlap_mask] = new_label
+                            report.append({"id": tracker[i].id, "start": start, "end": end,
+                                          "iou": iou, "filled": True, "reason": None})
                         else:
                             print(new_label, start, "area > 1000")
+                            report.append({"id": tracker[i].id, "start": start, "end": end, "iou": iou,
+                                          "filled": False, "reason": "target region already occupied"})
                 else:
                     print(new_label, start, "overlap < 0.9", iou)
+                    report.append({"id": tracker[i].id, "start": start, "end": end, "iou": iou,
+                                  "filled": False, "reason": "start/end masks don't overlap enough"})
+        if return_report:
+            return traced_image, traced_image_filled, report
         return traced_image, traced_image_filled
