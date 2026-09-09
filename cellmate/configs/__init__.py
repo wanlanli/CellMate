@@ -20,7 +20,7 @@ from ._cell_generation_property_name import (GENERATION_TREE,
                                              GENERATION_COLUMNS,
                                              CellGenParamMap,)
 
-from .config import DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH
+from .config import DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH, SKELETON_ECC_THRESHOLD
 
 
 __all__ = [
@@ -35,4 +35,5 @@ __all__ = [
     "DIVISION",
     "CONTOURS_LENGTH",
     "SKELETON_LENGTH",
+    "SKELETON_ECC_THRESHOLD",
 ]

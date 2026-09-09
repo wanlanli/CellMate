@@ -5,7 +5,8 @@ from functools import cached_property
 import numpy as np
 import pandas as pd
 
-from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH)
+from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH,
+                              SKELETON_ECC_THRESHOLD)
 from .measure._regionprops import regionprops_table
 from .measure import CoordTree
 from cellmate.utils import create_line, angle_of_vectors, included_angle, hash_func
@@ -19,11 +20,13 @@ class ImageMeasure():
     input_array : 2D matrix,dtype:int
         mask is a int type 2d mask array. stored the labels of segementation.
     """
-    def __init__(self, obj, pixel_size=1, sampling_interval=1, equidistant=False):
+    def __init__(self, obj, pixel_size=1, sampling_interval=1, equidistant=False,
+                 skeleton_ecc_threshold=SKELETON_ECC_THRESHOLD):
         self.data = obj
         self.pixel_size = pixel_size
         self.sampling_interval = sampling_interval
         self.equidistant = equidistant
+        self.skeleton_ecc_threshold = skeleton_ecc_threshold
         self._columns = None
         self._properties = None
         self._init_instance_properties()
@@ -95,7 +98,8 @@ class ImageMeasure():
                                            sampling_interval=self.sampling_interval,
                                            equidistant=self.equidistant,
                                            skeleton_length=SKELETON_LENGTH,
-                                           coord_length=CONTOURS_LENGTH)
+                                           coord_length=CONTOURS_LENGTH,
+                                           skeleton_ecc_threshold=self.skeleton_ecc_threshold)
         props = props.T
         data = np.empty((props.shape[0], 3), dtype=np.int_)
         # semantic

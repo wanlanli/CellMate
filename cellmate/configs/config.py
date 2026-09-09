@@ -2,6 +2,11 @@
 CONTOURS_LENGTH = 200
 SKELETON_LENGTH = 25
 RESOLUTION = 1
+# Skeleton routing: cells with no skeleton branch point and eccentricity
+# below this threshold use the geodesic ridge-path method; everything else
+# (branched, or eccentricity >= threshold) uses the thin+prune+extrapolate
+# method.
+SKELETON_ECC_THRESHOLD = 0.8
 # Segment:
 # # The segmentation model generates a label that encodes both a semantic label and an instance label.
 # # The semantic label represents the class or type of the object (e.g., different cell types or structures).

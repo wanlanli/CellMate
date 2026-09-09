@@ -32,6 +32,83 @@ def skeletonize_cell(image):
     return path
 
 
+def has_skeleton_branch(image):
+    """Whether the raw (pre branch-removal) skeleton of a binary mask has
+    any Y-fork, i.e. a skeleton pixel with more than 2 skeleton neighbors.
+
+    Used to decide whether a cell has simple rod/tube topology (one path,
+    two ends) or a branched/forked topology (e.g. a budding cell), for
+    which `tube_skeleton`'s single pole-to-pole path would be wrong.
+
+    Parameters:
+    -----------
+    image : numpy.ndarray
+        A 2D binary mask.
+
+    Returns:
+    --------
+    bool
+        True if a fork is present in the raw skeleton.
+    """
+    sk_image = skeletonize_image(image)
+    if sk_image.sum() < 2:
+        return False
+    neighbor_count = connected_neighbors(sk_image.astype(np.uint8))
+    return bool(np.any(neighbor_count > 2))
+
+
+def tube_skeleton(image, dist_power=2.0):
+    """Skeletonize a rod/tube-shaped binary mask as a weighted shortest path
+    between its two poles, biased to hug the medial ridge.
+
+    The two poles are the mask's foreground pixels with the smallest and
+    largest projection onto the major (PCA) axis, so they are always actual
+    boundary pixels -- the returned path touches the mask border at both
+    ends by construction, unlike `skeletonize_cell`'s thin-and-prune result
+    which needs a separate tip-extension step (`find_tips`/`find_tips_axis`).
+    The path is a shortest route through the mask where the cost of a pixel
+    is `1 / distance_to_background ** dist_power`, so the route favors
+    pixels far from the boundary (i.e. near the medial ridge) over a
+    straight line between the poles.
+
+    Only meaningful for single rod/tube topology (no branch) -- for a
+    branched mask this still returns *a* pole-to-pole path, but it ignores
+    any other branch. Check `has_skeleton_branch` first if that matters.
+
+    Parameters:
+    -----------
+    image : numpy.ndarray
+        A 2D binary mask with at least one foreground pixel.
+
+    dist_power : float, optional
+        Exponent applied to the distance-to-background term of the cost.
+        Higher values bias the path more strongly toward the medial ridge.
+
+    Returns:
+    --------
+    numpy.ndarray or None
+        A 2D array of (row, col) pixel coordinates from one pole to the
+        other, or None if the mask has fewer than 2 foreground pixels.
+    """
+    ys, xs = np.where(image > 0)
+    if len(ys) < 2:
+        return None
+    points = np.stack([ys, xs], axis=1).astype(float)
+    centered = points - points.mean(axis=0)
+    _, eigvecs = np.linalg.eigh(np.cov(centered.T))
+    major_axis = eigvecs[:, -1]
+    projection = centered @ major_axis
+    start = points[np.argmin(projection)].astype(int)
+    end = points[np.argmax(projection)].astype(int)
+
+    dist_to_background = ndimage.distance_transform_edt(image)
+    cost = 1.0 / np.power(dist_to_background + 0.5, dist_power)
+    cost[image == 0] = np.inf
+
+    path, _ = route_through_array(cost, start, end, fully_connected=True, geometric=True)
+    return np.array(path)
+
+
 def skeletonize_image(cropped_image, method: str = "lee"):
     """
     Skeletonizes a binary image using the specified method.

@@ -12,7 +12,9 @@ from scipy import ndimage as ndi
 from . import _moments
 from ._regionprops_utils import euler_number, perimeter, perimeter_crofton, _normalize_spacing
 from ._skeleton_cell import (perpendicular_grid, skeletonize_cell, smooth_curve,
-                             find_tips, find_tips_axis)
+                             find_tips, find_tips_axis,
+                             has_skeleton_branch, tube_skeleton)
+from cellmate.configs import SKELETON_ECC_THRESHOLD
 from ._distance import CoordTree
 from ._find_contours import find_contours
 __all__ = ['regionprops', 'euler_number', 'perimeter', 'perimeter_crofton']
@@ -271,7 +273,8 @@ class RegionProperties:
     def __init__(self, slice, label, label_image, intensity_image,
                  cache_active, *, extra_properties=None, spacing=None,
                  offset=None, pad=1, pixel_size=1, sampling_interval=1,
-                 skeleton_length=22, coord_length=60, equidistant=True):
+                 skeleton_length=22, coord_length=60, equidistant=True,
+                 skeleton_ecc_threshold=SKELETON_ECC_THRESHOLD):
 
         if intensity_image is not None:
             ndim = label_image.ndim
@@ -299,6 +302,7 @@ class RegionProperties:
             # print(self.sampling_interval, self.pixel_size, self.pixel_distance)
         self._skeleton_length = skeleton_length
         self._coord_length = coord_length
+        self._skeleton_ecc_threshold = skeleton_ecc_threshold
         self.slice = slice
         self._label_image = label_image
         self._intensity_image = intensity_image
@@ -465,14 +469,32 @@ class RegionProperties:
 
     @property
     @_cached
+    def _use_geodesic_skeleton(self):
+        """Whether this cell qualifies for `tube_skeleton`: simple rod/tube
+        topology (no skeleton branch/fork) and not too elongated. Elongated
+        cells are excluded because `tube_skeleton` only connects the two
+        farthest-apart poles, so on a curved/complex elongated shape it can
+        miss the correct path; the thin+prune+extrapolate method
+        (`skeletonize_cell`) is the fallback for those.
+        """
+        if self._skeleton_ecc_threshold is None:
+            return False
+        if self.eccentricity >= self._skeleton_ecc_threshold:
+            return False
+        return not has_skeleton_branch(self.image_pad)
+
+    @property
+    @_cached
     def skeleton(self):
-        path = skeletonize_cell(self.image_pad)
+        path = tube_skeleton(self.image_pad) if self._use_geodesic_skeleton else None
         if (path is None) or (len(path) < 3):
-            path = self._axis_tips()[:3]
-            path = path + [self._pad, self._pad]
-            path = find_tips_axis(path, self.coords_raw_pad)
-        else:
-            path = find_tips(path, self.coords_raw_pad)
+            path = skeletonize_cell(self.image_pad)
+            if (path is None) or (len(path) < 3):
+                path = self._axis_tips()[:3]
+                path = path + [self._pad, self._pad]
+                path = find_tips_axis(path, self.coords_raw_pad)
+            else:
+                path = find_tips(path, self.coords_raw_pad)
         if self.equidistant:
             perimeter = circumference(path, closed=False)
             self._skeleton_length = ceil(perimeter / self.pixel_distance) + 1
@@ -881,6 +903,7 @@ def regionprops_table(label_image, intensity_image=None,
                       separator='_', extra_properties=None, spacing=None,
                       pixel_size=1, sampling_interval=1, equidistant=True,
                       skeleton_length=22, coord_length=60,
+                      skeleton_ecc_threshold=SKELETON_ECC_THRESHOLD,
                       ):
     """Compute image properties and return them as a pandas-compatible table.
 
@@ -1019,7 +1042,8 @@ def regionprops_table(label_image, intensity_image=None,
     regions = regionprops(label_image, intensity_image=intensity_image,
                           cache=cache, extra_properties=extra_properties, spacing=spacing,
                           pixel_size=pixel_size, sampling_interval=sampling_interval, equidistant=equidistant,
-                          skeleton_length=skeleton_length, coord_length=coord_length)
+                          skeleton_length=skeleton_length, coord_length=coord_length,
+                          skeleton_ecc_threshold=skeleton_ecc_threshold)
     if extra_properties is not None:
         properties = (
             list(properties) + [prop.__name__ for prop in extra_properties]
@@ -1051,7 +1075,8 @@ def regionprops_table(label_image, intensity_image=None,
 def regionprops(label_image, intensity_image=None, cache=True,
                 *, extra_properties=None, spacing=None, offset=None,
                 pixel_size=1, sampling_interval=1, equidistant=True,
-                skeleton_length=22, coord_length=60):
+                skeleton_length=22, coord_length=60,
+                skeleton_ecc_threshold=SKELETON_ECC_THRESHOLD):
     r"""Measure properties of labeled image regions.
 
     Parameters
@@ -1351,7 +1376,8 @@ def regionprops(label_image, intensity_image=None, cache=True,
                                  cache, spacing=spacing, extra_properties=extra_properties,
                                  offset=offset_arr,
                                  pixel_size=pixel_size, sampling_interval=sampling_interval, equidistant=equidistant,
-                                 skeleton_length=skeleton_length, coord_length=coord_length)
+                                 skeleton_length=skeleton_length, coord_length=coord_length,
+                                 skeleton_ecc_threshold=skeleton_ecc_threshold)
         regions.append(props)
 
     return regions
