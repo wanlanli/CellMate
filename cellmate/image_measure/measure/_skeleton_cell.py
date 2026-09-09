@@ -32,6 +32,33 @@ def skeletonize_cell(image):
     return path
 
 
+def orient_start_to_top_left(path):
+    """Flip a path end-to-end, if needed, so it starts from whichever end
+    is closer to the image's top-left corner and ends at the other end.
+
+    "Closer to top-left" is measured as the smaller row+col sum. This gives
+    a deterministic start point/direction for a path within a single frame
+    -- it does not track which end is biologically the "same" tip across
+    frames of a moving/rotating cell.
+
+    Parameters:
+    -----------
+    path : numpy.ndarray
+        A 2D array of shape (n, 2) of (row, col) coordinates.
+
+    Returns:
+    --------
+    numpy.ndarray
+        `path` as given, or reversed if its last point is closer to the
+        top-left corner than its first point.
+    """
+    if len(path) < 2:
+        return path
+    if path[0].sum() > path[-1].sum():
+        return path[::-1]
+    return path
+
+
 def has_skeleton_branch(image):
     """Whether the raw (pre branch-removal) skeleton of a binary mask has
     any Y-fork, i.e. a skeleton pixel with more than 2 skeleton neighbors.

@@ -13,7 +13,8 @@ from . import _moments
 from ._regionprops_utils import euler_number, perimeter, perimeter_crofton, _normalize_spacing
 from ._skeleton_cell import (perpendicular_grid, skeletonize_cell, smooth_curve,
                              find_tips, find_tips_axis,
-                             has_skeleton_branch, tube_skeleton)
+                             has_skeleton_branch, tube_skeleton,
+                             orient_start_to_top_left)
 from cellmate.configs import SKELETON_ECC_THRESHOLD
 from ._distance import CoordTree
 from ._find_contours import find_contours
@@ -504,7 +505,7 @@ class RegionProperties:
         path = path - [self._pad, self._pad]
         object_offset = np.array([self.slice[i].start for i in range(self._ndim)])
         path = object_offset + path + self._offset
-        return path
+        return orient_start_to_top_left(path)
 
     @property
     def skeleton_major_length(self):
