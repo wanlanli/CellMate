@@ -243,6 +243,79 @@ class CellNetwork():
         # print(coords.shape)
         return coords
 
+    def skeleton_overtime(self, cell_id):
+        skeletons = []
+        frames = self.cells[cell_id].frames
+        for time in frames:
+            cell_label_t = self.label_map[time][cell_id]
+            skeletons.append(self.measure[time].skeleton(label=cell_label_t))
+        skeletons = np.array(skeletons)
+        return skeletons
+
+    def center_tips(self, cell_id):
+        """The two tip locations (skeleton endpoints), each centered
+        (median position) over every frame the cell is tracked in -- a
+        stable reference for "tip 1"/"tip 2" even though a single frame's
+        raw tip positions drift/rotate and can flip order frame to frame."""
+        from cellmate.patch._utils import centre_points
+
+        tips = self.tips_overtime(cell_id)
+        center_1 = centre_points(tips[:, 0])
+        center_2 = centre_points(tips[:, 1])
+        return center_1, center_2
+
+    def aligned_coords_overtime(self, cell_id, num_samples=None):
+        """Like coords_overtime, but the contour is split at the cell's two
+        (time-stabilized) tips and each half resampled to a fixed point
+        count, so point index N refers to roughly the same physical location
+        on the cell in every frame -- see CellNetworkPatch.aligned_coords,
+        which this generalizes to any CellNetwork (not just mating pairs)."""
+        from cellmate.configs import CONTOURS_LENGTH
+        from cellmate.patch._utils import circular_sequence, resample_curve
+
+        num_samples = num_samples or CONTOURS_LENGTH
+        half = num_samples // 2 + 1
+        center_tip_1, center_tip_2 = self.center_tips(cell_id)
+        coords = self.coords_overtime(cell_id)
+        new_coords = []
+        for i, time in enumerate(self.cells[cell_id].frames):
+            coord_t = coords[i]
+            cell_label_t = self.label_map[time][cell_id]
+            _, tip_1_index = self.measure[time].nearest_coordinate(cell_label_t, [center_tip_1], ptype="label")
+            _, tip_2_index = self.measure[time].nearest_coordinate(cell_label_t, [center_tip_2], ptype="label")
+            tip_1_index = tip_1_index[0][0]
+            tip_2_index = tip_2_index[0][0]
+            max_id = len(coord_t)
+            split_1 = circular_sequence(tip_1_index, tip_2_index, max_id)
+            split_2 = circular_sequence(tip_2_index, tip_1_index, max_id)
+            new_split1 = resample_curve(coord_t[split_1], half)
+            new_split2 = resample_curve(coord_t[split_2], half)
+            new_coord = np.vstack((new_split1, new_split2[1:-1]))
+            new_coords.append(new_coord)
+        return np.array(new_coords)
+
+    def aligned_skeleton_overtime(self, cell_id, num_samples=None):
+        """Like skeleton_overtime, but each frame's centerline is oriented to
+        start from the same (time-stabilized) tip -- reversed when needed --
+        and resampled to a fixed point count, so it can be compared point by
+        point across frames the same way aligned_coords_overtime does for the
+        contour."""
+        from cellmate.configs import SKELETON_LENGTH
+        from cellmate.patch._utils import resample_curve
+
+        num_samples = num_samples or SKELETON_LENGTH
+        center_tip_1, _ = self.center_tips(cell_id)
+        skeletons = self.skeleton_overtime(cell_id)
+        aligned = []
+        for skeleton in skeletons:
+            skeleton = np.asarray(skeleton)
+            start_dist = np.linalg.norm(skeleton[0] - center_tip_1)
+            end_dist = np.linalg.norm(skeleton[-1] - center_tip_1)
+            if end_dist < start_dist:
+                skeleton = skeleton[::-1]
+            aligned.append(resample_curve(skeleton, num_samples))
+        return np.array(aligned)
+
     def check_fusion_tips(self, cell_id):
         if self.cells[cell_id].start == 0:
             return 2
