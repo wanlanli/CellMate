@@ -35,19 +35,19 @@ def rigid(image: np.array, reference_channel=0, maxStep=1.0, minStep=0.01, numbe
             resampler.SetDefaultPixelValue(0)
             resampler.SetInterpolator(sitk.sitkLinear)
             # set fixed frame
-            moved_data = np.zeros(image.shape, dtype=np.uint16)
+            moved_data = np.zeros(image.shape, dtype=image.dtype)
             moved_data[0] = image[0]
             continue
-        moving = sitk.GetImageFromArray(image[i, 0].astype(np.float32))
+        moving = sitk.GetImageFromArray(image[i, reference_channel].astype(np.float32))
         outTx = R.Execute(fixed, moving)
         resampler.SetReferenceImage(fixed)
         resampler.SetTransform(outTx)
         for j in range(0, image.shape[1]):
             out = sitk.GetImageFromArray(image[i, j].astype(np.float32))
             out = resampler.Execute(out)
-            if j == 0:
+            if j == reference_channel:
                 fixed = out
-            moved_data[i, j] = sitk.GetArrayFromImage(out).astype(np.uint16)
+            moved_data[i, j] = sitk.GetArrayFromImage(out).astype(image.dtype)
     return moved_data
 
 
