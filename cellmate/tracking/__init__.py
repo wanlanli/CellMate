@@ -13,5 +13,6 @@
 # limitations under the License.
 
 from ._qc import check_tracking_quality
+from ._retrace import retrace
 
-__all__ = ["check_tracking_quality"]
+__all__ = ["check_tracking_quality", "retrace"]

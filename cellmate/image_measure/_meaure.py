@@ -572,9 +572,19 @@ class ImageMeasure():
         threshold: if > threshold, not neighbor
         """
         length = len(self.labels)
+        bboxes = self.bboxes
         connected_matrix = np.zeros((length, length))
         for i in range(0, length-1):
             for j in range(i+1, length):
+                # Cheap, exact lower bound first: if the two regions'
+                # bounding boxes are already farther apart than `threshold`
+                # allows, the real (expensive, per-pair nearest-neighbor
+                # search) check in __is_neighbor can only agree they're not
+                # neighbors -- skip it. This is the dominant cost for
+                # frames with many cells (O(n^2) pairs), most of which are
+                # nowhere near each other.
+                if _bbox_min_distance(bboxes[i], bboxes[j]) > threshold:
+                    continue
                 if self.__is_neighbor(i, j, threshold):
                     connected_matrix[i, j] = 1
                     connected_matrix[j, i] = 1
@@ -618,6 +628,25 @@ class ImageMeasure():
         min_distance = dist_matrix.min()
         min_distance_arg = np.argmin(dist_matrix)
         return min_distance, tips_source[min_distance_arg//2], tips_target[min_distance_arg%2]
+
+
+def _bbox_min_distance(bbox1, bbox2):
+    """Lower bound on the distance between ANY point in region 1 and ANY
+    point in region 2, from their bounding boxes alone
+    ([min_row, min_col, max_row, max_col]).
+
+    The gap between the two boxes along one axis is 0 if they overlap on
+    that axis, else the actual separation; combining both axes gives the
+    closest the two boxes could possibly come. Since every point of a
+    region lies within its own bounding box, the true nearest-point
+    distance between the regions can never be smaller than this -- so if
+    this already exceeds a neighbor threshold, the regions cannot be
+    neighbors and the (much more expensive) exact nearest-point search can
+    be skipped with no risk of a false negative.
+    """
+    row_gap = max(0.0, max(bbox1[0] - bbox2[2], bbox2[0] - bbox1[2]))
+    col_gap = max(0.0, max(bbox1[1] - bbox2[3], bbox2[1] - bbox1[3]))
+    return (row_gap ** 2 + col_gap ** 2) ** 0.5
 
 
 def _isin_list(source: list, target: list):

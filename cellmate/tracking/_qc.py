@@ -13,7 +13,7 @@ import io
 
 from cellmate.configs import DIVISION
 
-from ._iou_tracker import Tracker
+from ._retrace import retrace
 
 
 def check_tracking_quality(tracker, gap_report, tracked_image, threshold=None):
@@ -49,12 +49,11 @@ def check_tracking_quality(tracker, gap_report, tracked_image, threshold=None):
     # Tracker() prints its own frame-by-frame progress and division/fusion
     # log -- fine for the original run (you're watching it happen), just
     # noise for this internal verification pass.
-    retrace = Tracker(tracked_image, threshold=threshold or tracker.threshold, min_hist=1, max_miss=1)
     with contextlib.redirect_stdout(io.StringIO()):
-        retrace()
-    retrace_boxes = {b.id: b for b in retrace.all_trackers()}
+        retraced = retrace(tracked_image, threshold=threshold or tracker.threshold)
+    retrace_boxes = {b.id: b for b in retraced.all_trackers()}
     retrace_events = _events(
-        retrace.network,
+        retraced.network,
         label_of=lambda n: int(retrace_boxes[n].label[-1]),
         frame_of=lambda n: retrace_boxes[n].frame[0],
     )

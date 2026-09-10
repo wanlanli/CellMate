@@ -68,6 +68,30 @@ class CellNetwork():
         for t in range(0, self.image.shape[0]):
             self.label_map.append(self.label_trans(t))
 
+    @classmethod
+    def from_tracked_movie(cls, tracked_image, tracking_threshold, threshold, min_hist=1, max_miss=1, *args, **kwargs):
+        """Build a CellNetwork straight from an already-tracked label movie
+        (e.g. the mask channel of a saved tracked `.tif`), by re-tracking it
+        to reconstruct the division/fusion relationships instead of
+        requiring the original Tracker or its pickled network/trackers to
+        still be around -- see `cellmate.tracking.retrace`.
+
+        Parameters:
+        -----------
+        tracked_image: the tracked label movie, [T, H, W].
+        tracking_threshold: IoU threshold for the retrace -- use the same
+            value the tracking pass that produced `tracked_image` used.
+        threshold: neighbor/adjacency threshold, passed straight through to
+            `__init__` (same meaning as calling it directly).
+        min_hist, max_miss: passed to the retrace; defaults (1, 1) assume
+            `tracked_image` is already a clean, gap-filled delivery.
+        """
+        from cellmate.tracking import retrace
+
+        tracker = retrace(tracked_image, threshold=tracking_threshold, min_hist=min_hist, max_miss=max_miss)
+        return cls(image=tracked_image, time_network=tracker.network,
+                  tracker=tracker.save_trackers(), threshold=threshold, *args, **kwargs)
+
     def space_network_t(self, time):
         index = self.space_net_map[time]
         return self.space_network[index]
