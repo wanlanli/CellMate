@@ -4,7 +4,7 @@ from tqdm import trange
 
 from cellmate.image_measure import ImageMeasure
 from ._cell import Cell
-from ._classification import prediction_cell_type
+from ._classification import prediction_cell_type_snr, prediction_cell_type
 from ._classification90 import prediction_cell_type_h90switch
 from cellmate.configs import DIVISION
 import numpy as np
@@ -100,6 +100,22 @@ class CellNetwork():
         pass
 
     def create_cell_type(self, fluorescent_image, mask=None, *arg, **kwargs):
+        """Classify each cell's mating type from its fluorescence, per
+        channel relative to background (see `prediction_cell_type_snr`).
+        `z_threshold` (background std devs to call a channel "on", default
+        3.0) is the knob to tune per dataset."""
+        if mask is None:
+            mask = self.image
+        cell_pred, data = prediction_cell_type_snr(fluorescent_image, mask, *arg, **kwargs)
+        type_maps = cell_pred.to_dict()
+        for k, v in type_maps.items():
+            self.cells[k % DIVISION].strain_type = v
+        self.fluorescent_intensity = data
+
+    def create_cell_type_legacy(self, fluorescent_image, mask=None, *arg, **kwargs):
+        """Original classifier (KMeans on a log-ratio normalization, tuned
+        via `high_val`) -- kept as a reference/fallback to double-check
+        `create_cell_type`'s SNR-based result against on other datasets."""
         if mask is None:
             mask = self.image
         cell_pred, data = prediction_cell_type(fluorescent_image, mask, *arg, **kwargs)
