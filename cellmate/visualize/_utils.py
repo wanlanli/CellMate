@@ -2,6 +2,63 @@ import numpy as np
 from ._colormap import COLORMAP
 
 
+def plot_cell_types(cellnet, frame=0, strain_colors=None, ax=None):
+    """Overlay each cell's predicted `strain_type` (set by
+    `CellNetwork.create_cell_type`) on one frame of `cellnet.image`, labeled
+    with its id -- for visually spot-checking the classification.
+
+    Parameters
+    ----------
+    cellnet: CellNetwork
+        Must already have had `create_cell_type` called on it.
+    frame: int
+        Which frame of `cellnet.image` to draw.
+    strain_colors: dict[int, str], optional
+        strain_type -> matplotlib color. Defaults to
+        {0: "lightgray", 1: "tab:red", 2: "tab:blue", 3: "tab:purple"}
+        (0 = unclassified, 1 = ch0 marker/h+, 2 = ch1 marker/h-, 3 = both).
+    ax: matplotlib.axes.Axes, optional
+        Axes to draw into; a new figure/axes is created if omitted.
+
+    Returns
+    -------
+    ax: matplotlib.axes.Axes
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
+
+    if strain_colors is None:
+        strain_colors = {0: "lightgray", 1: "tab:red", 2: "tab:blue", 3: "tab:purple"}
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 6))
+
+    labels = cellnet.image[frame]
+    ax.imshow(labels > 0, cmap="gray", alpha=0.3)
+
+    id_by_label = {v: k for k, v in cellnet.label_map[frame].items()}
+    for cell_label in np.unique(labels):
+        if cell_label == 0:
+            continue
+        cell_id = id_by_label.get(cell_label)
+        if cell_id is None or cell_id not in cellnet.cells:
+            continue
+        strain_type = cellnet.cells[cell_id].strain_type
+        color = strain_colors.get(strain_type, "black")
+
+        mask = labels == cell_label
+        rows, cols = np.nonzero(mask)
+        overlay = np.zeros((*labels.shape, 4))
+        overlay[mask] = to_rgba(color, alpha=0.6)
+        ax.imshow(overlay)
+        ax.text(cols.mean(), rows.mean(), f"{cell_id}\n({strain_type})",
+                color="white", ha="center", va="center", fontsize=8)
+
+    ax.set_title(f"frame {frame} -- predicted strain_type")
+    ax.axis("off")
+    return ax
+
+
 def label2rgb(img, colormap=None):
     """
     Convert a labeled image to an RGB image using a colormap.
