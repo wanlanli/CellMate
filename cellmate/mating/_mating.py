@@ -4,7 +4,8 @@ from tqdm import trange
 
 from cellmate.image_measure import ImageMeasure
 from ._cell import Cell
-from ._classification import prediction_cell_type_snr, prediction_cell_type
+from ._classification import prediction_cell_type_snr
+from ._classification_legacy import prediction_cell_type
 from ._classification90 import prediction_cell_type_h90switch
 from cellmate.configs import DIVISION
 import numpy as np

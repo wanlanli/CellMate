@@ -3,7 +3,7 @@ from skimage import morphology
 import scipy.ndimage as ndi
 import pandas as pd
 from tqdm import trange
-from ._classification import FluorescentClassification
+from ._classification_legacy import FluorescentClassification
 
 
 
