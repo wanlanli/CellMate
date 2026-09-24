@@ -16,13 +16,23 @@ import numpy as np
 import pandas as pd
 
 
+RANK_COLUMNS = {
+    'nearest_dist': 'near_dist_rank',
+    'center_dist': 'center_dist_rank',
+    'p_start': 'p_star_time_rank',
+    'm_start': 'm_star_time_rank',
+    'tip_distance': 'tip_dist_rank',
+}
+
+
 def get_mating_feature(cellnet, time_step: int = 10):
     fusion_cells = cellnet.fusion_cells()
-    fusion_data_table = None
+    frames = []
     group_index = 0
     for key in fusion_cells:
         fcell = cellnet.cells[key]
-        parents = fcell.parents
+        # copy: potential_mating_feature reorders parents in place
+        parents = list(fcell.parents)
         print(parents)
         data = cellnet.potential_mating_feature(parents, time_step=time_step)
         if data is None:
@@ -31,11 +41,11 @@ def get_mating_feature(cellnet, time_step: int = 10):
         data["fusion_key"] = key
         data["fusion_time"] = fcell.start
         data["group_index"] = group_index
-        data['near_dist_rank'] = data.groupby(['ref_type', 'time_stamp'])['nearest_dist'].rank(ascending=True, method='min').astype(int)
-        data['center_dist_rank'] = data.groupby(['ref_type', 'time_stamp'])['center_dist'].rank(ascending=True, method='min').astype(int)
-        data['p_star_time_rank'] = data.groupby(['ref_type', 'time_stamp'])['p_start'].rank(ascending=True, method='min').astype(int)
-        data['m_star_time_rank'] = data.groupby(['ref_type', 'time_stamp'])['m_start'].rank(ascending=True, method='min').astype(int)
-        data['tip_dist_rank'] = data.groupby(['ref_type', 'time_stamp'])['tip_distance'].rank(ascending=True, method='min').astype(int)
-        data['time_diff'] = np.where(data['ref_type'] == 1, data['m_start'] - data['p_start'], data['p_start'] - data['m_start'])
-        fusion_data_table = pd.concat([fusion_data_table, data])
-    return fusion_data_table
+        ranks = data.groupby(['ref_type', 'time_stamp'])[list(RANK_COLUMNS)].rank(ascending=True, method='min')
+        data[list(RANK_COLUMNS.values())] = ranks.rename(columns=RANK_COLUMNS).astype('Int64')
+        # time_diff = partner start - ref start
+        data['time_diff'] = np.where(data['ref_id'] == data['p_id'], data['m_start'] - data['p_start'], data['p_start'] - data['m_start'])
+        frames.append(data)
+    if not frames:
+        return None
+    return pd.concat(frames)
