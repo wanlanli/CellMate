@@ -28,32 +28,38 @@ def plot_cell_types(cellnet, frame=0, strain_colors=None, ax=None):
     from matplotlib.colors import to_rgba
 
     if strain_colors is None:
-        strain_colors = {0: "lightgray", 1: "tab:red", 2: "tab:blue", 3: "tab:purple"}
+        strain_colors = {
+            0: (211, 211, 211),  # light gray
+            1: (0, 255, 0),      # green
+            2: (255, 0, 0),      # red
+            3: (255, 165, 0),    # orange
+        }
 
     if ax is None:
         _, ax = plt.subplots(figsize=(6, 6))
 
-    labels = cellnet.image[frame]
-    ax.imshow(labels > 0, cmap="gray", alpha=0.3)
+    mask = cellnet.image[frame]
+    ax.imshow(mask > 0, cmap="gray", alpha=0.3)
 
+    colored_mask = np.full((*mask.shape, 3), 255, dtype=np.uint8)
     id_by_label = {v: k for k, v in cellnet.label_map[frame].items()}
-    for cell_label in np.unique(labels):
+    for cell_label in np.unique(mask):
         if cell_label == 0:
             continue
         cell_id = id_by_label.get(cell_label)
         if cell_id is None or cell_id not in cellnet.cells:
             continue
         strain_type = cellnet.cells[cell_id].strain_type
-        color = strain_colors.get(strain_type, "black")
-
-        mask = labels == cell_label
-        rows, cols = np.nonzero(mask)
-        overlay = np.zeros((*labels.shape, 4))
-        overlay[mask] = to_rgba(color, alpha=0.6)
-        ax.imshow(overlay)
-        ax.text(cols.mean(), rows.mean(), f"{cell_id}\n({strain_type})",
-                color="white", ha="center", va="center", fontsize=8)
-
+        if strain_type in strain_colors:
+            colored_mask[mask == cell_label] = strain_colors[strain_type]
+        # mask = labels == cell_label
+        # rows, cols = np.nonzero(mask)
+        # overlay = np.zeros((*labels.shape, 4))
+        # overlay[mask] = to_rgba(color, alpha=0.6)
+        # ax.imshow(overlay)
+        # ax.text(cols.mean(), rows.mean(), f"{cell_id}\n({strain_type})",
+        #         color="white", ha="center", va="center", fontsize=8)
+    ax.imshow(colored_mask)
     ax.set_title(f"frame {frame} -- predicted strain_type")
     ax.axis("off")
     return ax

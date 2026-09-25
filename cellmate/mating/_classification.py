@@ -148,6 +148,38 @@ def _mode_per_cell(data, column):
     return data.groupby("label")[column].agg(lambda x: pd.Series.mode(x).iloc[0])
 
 
+def compute_snr_table(fluorescent_image, masks, channel_number=2, bg_threshold=10, bg_region="background", fc_threshold=50, min_noise=1.0):
+    """Expensive half of the SNR pipeline: one pass over the full image
+    stack to get `background` + `instance_fluorescent_intensity`, plus the
+    `ch_i_snr` columns. None of this depends on `z_threshold`, so it's the
+    part worth caching (`CellNetwork.fluorescent_intensity` does) and reusing
+    across a `z_threshold` sweep via `classify_snr_table` instead of
+    recomputing from the images every time -- see `CellNetwork.create_cell_type`.
+    """
+    bg_mean, bg_std = background(fluorescent_image, masks, threshold=bg_threshold, region=bg_region, return_std=True)
+    data = instance_fluorescent_intensity(fluorescent_image, masks, bg=bg_mean, bg_std=bg_std, measure_line=fc_threshold)
+    data = _add_channel_snr(data, channel_number, min_noise=min_noise)
+    return data
+
+
+def classify_snr_table(data, channel_number, z_threshold=3.0):
+    """Cheap half of the SNR pipeline: turn an already-computed SNR table
+    (from `compute_snr_table`, carrying `ch_i_snr` columns) into per-channel
+    on/off calls and one type per cell, for a given `z_threshold`. A groupby
+    over a small DataFrame -- fast enough to call again on every threshold
+    change.
+
+    Returns
+    -------
+    cell_types: pd.Series, index = label, value = channel_prediction_snr
+        (mode across that cell's frames).
+    data: pd.DataFrame, `data` plus `ch_i_prediction_snr` / `channel_prediction_snr`.
+    """
+    data = _add_channel_calls(data, channel_number, z_threshold=z_threshold)
+    cell_types = _mode_per_cell(data, "channel_prediction_snr")
+    return cell_types, data
+
+
 def prediction_cell_type_snr(fluorescent_image, masks, channel_number=2, bg_threshold=10, bg_region="background", fc_threshold=50, z_threshold=3.0, min_noise=1.0):
     """Current default classifier: decides each channel on/off independently
     by comparing directly against that frame's background (mean + std),
@@ -164,6 +196,10 @@ def prediction_cell_type_snr(fluorescent_image, masks, channel_number=2, bg_thre
     per-channel-only test can) -- see `cellmate.mating._classification_legacy`
     if you need a second opinion on an unfamiliar dataset.
 
+    Just a thin wrapper around `compute_snr_table` + `classify_snr_table` --
+    call those two directly to avoid recomputing the table when only
+    `z_threshold` changes.
+
     Returns
     -------
     cell_types: pd.Series, index = label, value = channel_prediction_snr
@@ -173,9 +209,6 @@ def prediction_cell_type_snr(fluorescent_image, masks, channel_number=2, bg_thre
         channel_prediction_snr) -- e.g. for the SNR scatter plot in
         `04_overview_cellnetwork_local.ipynb`.
     """
-    bg_mean, bg_std = background(fluorescent_image, masks, threshold=bg_threshold, region=bg_region, return_std=True)
-    data = instance_fluorescent_intensity(fluorescent_image, masks, bg=bg_mean, bg_std=bg_std, measure_line=fc_threshold)
-    data = _add_channel_snr(data, channel_number, min_noise=min_noise)
-    data = _add_channel_calls(data, channel_number, z_threshold=z_threshold)
-    cell_types = _mode_per_cell(data, "channel_prediction_snr")
-    return cell_types, data
+    data = compute_snr_table(fluorescent_image, masks, channel_number=channel_number, bg_threshold=bg_threshold,
+                              bg_region=bg_region, fc_threshold=fc_threshold, min_noise=min_noise)
+    return classify_snr_table(data, channel_number, z_threshold=z_threshold)

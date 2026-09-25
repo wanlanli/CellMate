@@ -1,10 +1,12 @@
+import re
+
 import pandas as pd
 import networkx as nx
 from tqdm import trange
 
 from cellmate.image_measure import ImageMeasure
 from ._cell import Cell
-from ._classification import prediction_cell_type_snr
+from ._classification import compute_snr_table, classify_snr_table
 from ._classification_legacy import prediction_cell_type
 from ._classification90 import prediction_cell_type_h90switch
 from cellmate.configs import DIVISION
@@ -18,6 +20,9 @@ class CellNetwork():
         self.time_network = time_network
         self.neighbor_threshold = threshold
         self.space_net = None
+
+        self.classification_params = None
+        self._intensity_cache_key = None
 
         self.measure = []
         self.space_network = []
@@ -100,18 +105,214 @@ class CellNetwork():
     def create_cells(self):
         pass
 
-    def create_cell_type(self, fluorescent_image, mask=None, *arg, **kwargs):
+    def create_cell_type(self, fluorescent_image=None, mask=None, channel_number=2, bg_threshold=10,
+                         bg_region="background", fc_threshold=50, z_threshold=3.0, min_noise=1.0,
+                         force_recompute=False):
         """Classify each cell's mating type from its fluorescence, per
         channel relative to background (see `prediction_cell_type_snr`).
         `z_threshold` (background std devs to call a channel "on", default
-        3.0) is the knob to tune per dataset."""
-        if mask is None:
-            mask = self.image
-        cell_pred, data = prediction_cell_type_snr(fluorescent_image, mask, *arg, **kwargs)
+        3.0) is the knob to tune per dataset.
+
+        Computing the per-(cell, frame) intensity/SNR table (one pass over
+        the whole image stack, via `compute_snr_table`) is expensive;
+        turning that table into type calls for a given `z_threshold` (via
+        `classify_snr_table`) is cheap. So this caches the table in
+        `self.fluorescent_intensity` and, as long as `fluorescent_image`/
+        `mask`/`channel_number`/`bg_threshold`/`bg_region`/`fc_threshold`/
+        `min_noise` haven't changed since it was built, reuses it -- pass
+        just a new `z_threshold` to re-run classification only. Omit
+        `fluorescent_image` entirely to force that reuse (e.g. after
+        unpickling a `CellNetwork` that already has `fluorescent_intensity`
+        set). Pass `force_recompute=True` to rebuild the table regardless.
+
+        `classification_params`/the cache key are plain attributes set here,
+        so a `CellNetwork` pickled *before* this caching existed won't have
+        them -- `getattr(..., None)` below just treats that as "no cache
+        info", and `channel_number` gets recovered from the old table's own
+        `ch_i_snr` columns (unchanged schema) instead of raising.
+
+        The cache is tagged `method="full"` so this won't be confused with a
+        table built by `create_cell_type_by_lineage` (which only measures
+        root cells, at their own start frame) -- reusing that as if it were
+        this method's full per-(cell, frame) table would silently give every
+        other cell whatever its lineage ancestor's summary happened to be,
+        instead of running this method's own per-cell classification.
+        """
+        cached_params = getattr(self, "classification_params", None)
+        cached_key = getattr(self, "_intensity_cache_key", None)
+
+        if fluorescent_image is None:
+            if force_recompute:
+                raise ValueError("force_recompute=True needs fluorescent_image to recompute from")
+            if self.fluorescent_intensity is None:
+                raise ValueError("fluorescent_image is required the first time create_cell_type is "
+                                  "called; omit it on later calls to just re-threshold the cached "
+                                  "intensity table")
+            if cached_params is None:
+                # raw `ch_{i}_snr` columns only -- not `ch_{i}_prediction_snr`,
+                # which is also present once classify_snr_table has run. A
+                # pkl this old predates create_cell_type_by_lineage too, so
+                # it can only be a `create_cell_type` table.
+                snr_cols = [c for c in self.fluorescent_intensity.columns
+                            if re.fullmatch(r"ch_\d+_snr", c)]
+                cached_params = {"channel_number": len(snr_cols), "method": "full"}
+            elif cached_params.get("method", "full") != "full":
+                raise ValueError(
+                    "self.fluorescent_intensity was built by create_cell_type_by_lineage "
+                    "(method=%r), not create_cell_type -- it only has rows for root cells, "
+                    "not every cell/frame. Pass fluorescent_image to (re)build a full table "
+                    "here." % cached_params.get("method"))
+            recompute = False
+        else:
+            if mask is None:
+                mask = self.image
+            cache_key = (id(fluorescent_image), id(mask), channel_number, bg_threshold,
+                         bg_region, fc_threshold, min_noise)
+            recompute = force_recompute or cache_key != cached_key
+
+        if recompute:
+            self.fluorescent_intensity = compute_snr_table(
+                fluorescent_image, mask, channel_number=channel_number, bg_threshold=bg_threshold,
+                bg_region=bg_region, fc_threshold=fc_threshold, min_noise=min_noise)
+            cached_key = cache_key
+            cached_params = dict(channel_number=channel_number, bg_threshold=bg_threshold,
+                                 bg_region=bg_region, fc_threshold=fc_threshold,
+                                 min_noise=min_noise, method="full")
+
+        channel_number = cached_params["channel_number"]
+        cell_pred, data = classify_snr_table(self.fluorescent_intensity, channel_number, z_threshold=z_threshold)
         type_maps = cell_pred.to_dict()
         for k, v in type_maps.items():
             self.cells[k % DIVISION].strain_type = v
         self.fluorescent_intensity = data
+        cached_params["z_threshold"] = z_threshold
+        self.classification_params = cached_params
+        self._intensity_cache_key = cached_key
+
+    def create_cell_type_by_lineage(self, fluorescent_image=None, mask=None, channel_number=2, bg_threshold=10,
+                                    bg_region="background", fc_threshold=50, z_threshold=3.0, min_noise=1.0,
+                                    force_recompute=False):
+        """Classify cell types from the tracked lineage instead of every
+        cell's every frame -- only valid for movies whose division/fusion
+        tracking (`self.time_network`) is trustworthy throughout.
+
+        Only "root" cells -- present from the start with no recorded parent
+        (`cell.ancient is None and not cell.parents`, i.e. no division or
+        fusion produced them within this movie) -- are measured directly,
+        each on the single frame it starts in (`compute_snr_table` +
+        `classify_snr_table`, same SNR rule as `create_cell_type`). Every
+        other cell's type is then propagated down `self.time_network`:
+        - division (`cell.ancient` set): the daughter copies its parent's
+          type.
+        - fusion (`cell.parents` set, two of them): the child's type is the
+          bitwise OR of both parents' types -- so two complementary
+          single-marker parents (e.g. 1 and 2) fuse into a double-positive
+          zygote (3), matching real mating biology; two same-type parents
+          just stay that type.
+
+        Measuring one frame per root instead of every frame of every cell
+        is far cheaper on long movies, but it will silently misclassify a
+        lineage if a division/fusion was missed or mis-tracked, or if a
+        cell's marker isn't stable across generations -- `create_cell_type`
+        is the one to fall back on if that's a risk for this dataset.
+
+        Caches the per-root intensity table the same way `create_cell_type`
+        does: as long as `fluorescent_image`/`mask`/`channel_number`/
+        `bg_threshold`/`bg_region`/`fc_threshold`/`min_noise` haven't
+        changed, a later call with just a different `z_threshold` reuses it
+        (and just re-propagates) instead of re-measuring -- omit
+        `fluorescent_image` entirely to force that reuse. Pass
+        `force_recompute=True` to rebuild it regardless.
+
+        The cache is tagged `method="lineage"` -- if it's already tagged
+        that way, a later no-image call just reuses it as-is (rows already
+        one per root, at its own start frame). If instead `fluorescent_intensity`
+        holds some other table (e.g. a `create_cell_type` one, with a row
+        for every (cell, frame)), a no-image call takes that table's `frame
+        == 0` rows as the root measurements instead of raising -- cheap
+        (just a filter, no re-measuring) and correct as long as every root
+        this movie has actually starts at frame 0; a root that first
+        appears later (tracking gap, cell entering view mid-movie) won't be
+        in that slice and is left with whatever `strain_type` it already
+        had. Pass `fluorescent_image` (or `force_recompute=True` with one)
+        to measure every root at its own real start frame instead.
+        """
+        cached_params = getattr(self, "classification_params", None)
+        cached_key = getattr(self, "_intensity_cache_key", None)
+
+        if fluorescent_image is None:
+            if force_recompute:
+                raise ValueError("force_recompute=True needs fluorescent_image to recompute from")
+            if self.fluorescent_intensity is None:
+                raise ValueError("fluorescent_image is required the first time "
+                                  "create_cell_type_by_lineage is called; omit it on later calls to "
+                                  "just re-threshold the cached intensity table")
+            if cached_params is not None and cached_params.get("method") == "lineage":
+                recompute = False
+            else:
+                # Not our own root-only table (e.g. a create_cell_type one,
+                # with every cell at every frame) -- take its frame-0 rows
+                # as the root measurements instead of requiring a recompute.
+                if cached_params is not None:
+                    channel_number = cached_params["channel_number"]
+                else:
+                    snr_cols = [c for c in self.fluorescent_intensity.columns
+                                if re.fullmatch(r"ch_\d+_snr", c)]
+                    channel_number = len(snr_cols)
+                self.fluorescent_intensity = (
+                    self.fluorescent_intensity[self.fluorescent_intensity["frame"] == 0].copy())
+                cached_key = None
+                cached_params = dict(channel_number=channel_number, method="lineage")
+                recompute = False
+        else:
+            if mask is None:
+                mask = self.image
+            cache_key = (id(fluorescent_image), id(mask), channel_number, bg_threshold,
+                         bg_region, fc_threshold, min_noise, "lineage")
+            recompute = force_recompute or cache_key != cached_key
+
+        if recompute:
+            root_cells = [cell for cell in self.cells.values()
+                         if cell.ancient is None and not cell.parents]
+
+            frames_needed = {}
+            for cell in root_cells:
+                frames_needed.setdefault(cell.start, []).append(cell.id)
+
+            tables = []
+            for frame in frames_needed:
+                table = compute_snr_table(
+                    fluorescent_image[frame:frame + 1], mask[frame:frame + 1],
+                    channel_number=channel_number, bg_threshold=bg_threshold, bg_region=bg_region,
+                    fc_threshold=fc_threshold, min_noise=min_noise)
+                table["frame"] = frame
+                tables.append(table)
+            self.fluorescent_intensity = (pd.concat(tables, ignore_index=True) if tables
+                                          else pd.DataFrame())
+            cached_key = cache_key
+            cached_params = dict(channel_number=channel_number, bg_threshold=bg_threshold,
+                                 bg_region=bg_region, fc_threshold=fc_threshold,
+                                 min_noise=min_noise, method="lineage")
+
+        channel_number = cached_params["channel_number"]
+        root_pred, data = classify_snr_table(self.fluorescent_intensity, channel_number, z_threshold=z_threshold)
+        for k, v in root_pred.to_dict().items():
+            self.cells[k % DIVISION].strain_type = v
+
+        for node in nx.topological_sort(self.time_network):
+            if node not in self.cells:
+                continue
+            cell = self.cells[node]
+            if cell.ancient is not None:
+                cell.strain_type = self.cells[cell.ancient].strain_type
+            elif cell.parents:
+                parent_1, parent_2 = cell.parents
+                cell.strain_type = self.cells[parent_1].strain_type | self.cells[parent_2].strain_type
+
+        self.fluorescent_intensity = data
+        cached_params["z_threshold"] = z_threshold
+        self.classification_params = cached_params
+        self._intensity_cache_key = cached_key
 
     def create_cell_type_legacy(self, fluorescent_image, mask=None, *arg, **kwargs):
         """Original classifier (KMeans on a log-ratio normalization, tuned
