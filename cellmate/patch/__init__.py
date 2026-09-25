@@ -13,16 +13,18 @@
 # limitations under the License.
 
 from ._patchcell import CellNetworkPatch
-from ._utils import intensity_multiple_points, circular_sequence, resample_curve, move_to_center, intensity_multiple_points_debug
+from ._utils import intensity_multiple_points, intensity_multiple_points_fast, circular_sequence, resample_curve, move_to_center, move_inward, intensity_multiple_points_debug
 from ._patch import DynamicPatch, post_process, estimate_delay, patch_activity_picker
 from ._classification_patch import prediction_cell_type_patch
 
 __all__ = [
     "CellNetworkPatch",
     "intensity_multiple_points",
+    "intensity_multiple_points_fast",
     "circular_sequence",
     "resample_curve",
     "move_to_center",
+    "move_inward",
     "intensity_multiple_points_debug",
     "DynamicPatch",
     "post_process",

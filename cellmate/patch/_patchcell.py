@@ -1,12 +1,9 @@
 import numpy as np
 
 from cellmate.mating import CellNetwork90
-from ._utils import centre_points, circular_sequence, resample_curve, move_to_center, intensity_multiple_points
-from ..configs import CONTOURS_LENGTH
+from ._utils import move_to_center, move_inward, intensity_multiple_points_fast
+from ..configs import DIVISION
 from ._classification_patch import prediction_cell_type_patch
-
-
-DIVISION = 1000
 
 
 class CellNetworkPatch(CellNetwork90):
@@ -14,54 +11,35 @@ class CellNetworkPatch(CellNetwork90):
         super().__init__(image, time_network, tracker, threshold, *args, **kwargs)
         self._aligned_coords = {}
 
-    def raw_patch(self, cell_id, image, channel, dist=5, radius=9):
+    def raw_patch(self, cell_id, image, channel, dist=5, radius=9, move="normal"):
+        """Patch intensity at each aligned contour point, sampled `dist`
+        pixels inside the membrane. `move="normal"` moves points along the
+        contour's inward normal; `move="center"` moves them toward the cell
+        centre (the previous behaviour)."""
         data_overtime = []
         bg_overtime = []
         frames = self.cells[cell_id].frames
         coords = self.aligned_coords(cell_id)
-        centers = self.center_overtime(cell_id)
+        if move == "center":
+            centers = self.center_overtime(cell_id)
         for i, time in enumerate(frames):
-            coord_t = move_to_center(coords[i], centers[i], dist=dist)
-            data, bg = intensity_multiple_points(image[time, channel],
-                                                 coord_t, radius,
-                                                 (image[time, -1] % 1000 == cell_id),
-                                                 method="mean",
-                                                 background_percentile=50)
+            if move == "center":
+                coord_t = move_to_center(coords[i], centers[i], dist=dist)
+            else:
+                coord_t = move_inward(coords[i], dist=dist)
+            data, bg = intensity_multiple_points_fast(image[time, channel],
+                                                      coord_t, radius,
+                                                      (image[time, -1] % DIVISION == cell_id),
+                                                      background_percentile=50)
             data_overtime.append(data)
             bg_overtime.append(bg)
         data_overtime = np.array(data_overtime)
         bg_overtime = np.array(bg_overtime)
         return data_overtime, bg_overtime
 
-    def center_tips(self, cell_id):
-        tips = self.tips_overtime(cell_id)
-        center_1 = centre_points(tips[:, 0])
-        center_2 = centre_points(tips[:, 1])
-        return center_1, center_2
-
-    def cal_aligned_coords(self, cell_id):
-        center_tip_1, center_tip_2 = self.center_tips(cell_id)
-        coords = self.coords_overtime(cell_id)
-        new_coords = []
-        for i, time in enumerate(self.cells[cell_id].frames):
-            coord_t = coords[i]
-            cell_label_t = self.label_trans(time)[cell_id]
-            _, tip_1_index = self.measure[time].nearest_coordinate(cell_label_t, [center_tip_1], ptype="label")
-            tip_1_index = tip_1_index[0][0]
-            _, tip_2_index = self.measure[time].nearest_coordinate(cell_label_t, [center_tip_2], ptype="label")
-            tip_2_index = tip_2_index[0][0]
-            split_1 = circular_sequence(tip_1_index, tip_2_index, CONTOURS_LENGTH)
-            split_2 = circular_sequence(tip_2_index, tip_1_index, CONTOURS_LENGTH)
-
-            new_split1 = resample_curve(coord_t[split_1], CONTOURS_LENGTH//2+1)
-            new_split2 = resample_curve(coord_t[split_2], CONTOURS_LENGTH//2+1)
-            new_coord = np.vstack((new_split1, new_split2[1:-1]))
-            new_coords.append(new_coord)
-        return np.array(new_coords)
-
     def aligned_coords(self, cell_id):
         if cell_id not in self._aligned_coords.keys():
-            self._aligned_coords[cell_id] = self.cal_aligned_coords(cell_id)
+            self._aligned_coords[cell_id] = self.aligned_coords_overtime(cell_id)
         return self._aligned_coords[cell_id]
 
     def nearest_points(self, cell_id1, cell_id2):
@@ -110,8 +88,6 @@ def common_frames(frames_1, frames_2):
         - Its index in frames_1
         - Its index in frames_2
     """
-    common_elements = np.intersect1d(frames_1, frames_2)
-    indexes_array1 = np.nonzero(np.isin(frames_1, common_elements))[0]
-    indexes_array2 = np.nonzero(np.isin(frames_2, common_elements))[0]
-    frames = [(element, idx1, idx2) for element, idx1, idx2 in zip(common_elements, indexes_array1, indexes_array2)]
-    return frames
+    common_elements, indexes_array1, indexes_array2 = np.intersect1d(frames_1, frames_2, assume_unique=True,
+                                                                     return_indices=True)
+    return list(zip(common_elements, indexes_array1, indexes_array2))

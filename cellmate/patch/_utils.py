@@ -13,7 +13,7 @@
 # limitations under the License.
 import numpy as np
 from scipy.interpolate import interp1d
-from scipy.ndimage import  binary_erosion
+from scipy.ndimage import binary_erosion, convolve, map_coordinates
 
 
 def move_to_center(point, center=[0, 0], dist=5):
@@ -36,8 +36,41 @@ def move_to_center(point, center=[0, 0], dist=5):
     new_points : numpy.ndarray, shape (n_points, 2)
         The new coordinates of the points after moving them towards the center.
     """
-    org_length = np.sqrt(np.sum(np.square(point - center), axis=1).astype(np.float16))
+    org_length = np.sqrt(np.sum(np.square(point - center), axis=1).astype(np.float64))
     return dist/org_length[:, None] * (center - point)+point
+
+
+def move_inward(points, dist=5, span=3):
+    """
+    Moves each point of a closed contour `dist` pixels along the contour's
+    inward normal, so every point ends up the same depth inside the
+    membrane. Unlike `move_to_center`, side points of an elongated or bent
+    cell move across it and tip points move along it by the same amount.
+
+    Parameters:
+    ----------
+    points : array-like, shape (n_points, 2)
+        A closed contour, in order (either winding direction).
+
+    dist : float, optional, default=5
+        The distance each point moves inward.
+
+    span : int, optional, default=3
+        The tangent at point i is taken from point i-span to point i+span,
+        which smooths out pixel-level steps in the contour.
+
+    Returns:
+    ----------
+    new_points : numpy.ndarray, shape (n_points, 2)
+    """
+    points = np.asarray(points, dtype=np.float64)
+    tangent = np.roll(points, -span, axis=0) - np.roll(points, span, axis=0)
+    tangent /= np.linalg.norm(tangent, axis=1, keepdims=True)
+    x, y = points[:, 0], points[:, 1]
+    winding = np.sign(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+    # left-hand normal points inward for a positive (counter-clockwise) winding
+    normal = winding * np.stack((-tangent[:, 1], tangent[:, 0]), axis=1)
+    return points + dist * normal
 
 
 def circle_grid(shape):
@@ -96,6 +129,53 @@ def intensity_multiple_points(image, centers, radius, mask, method="mean", perce
             intensity = 0
         intensities.append(intensity)
     return intensities, background
+
+
+def disk_kernel(radius):
+    """Boolean disk of pixels within `radius` of the centre pixel."""
+    r = int(np.ceil(radius))
+    x, y = np.ogrid[-r:r + 1, -r:r + 1]
+    return (x ** 2 + y ** 2) <= radius ** 2
+
+
+def intensity_multiple_points_fast(image, centers, radius, mask, background_percentile=50):
+    """Mean-method equivalent of `intensity_multiple_points`, but the disk
+    mean is computed once for the whole neighbourhood with a disk filter and
+    then read at each centre (bilinear), instead of building a full-image
+    distance grid per centre. Work is cropped to the centres' bounding box
+    (plus margin) of the image, so cost no longer scales with image size x
+    number of centres.
+
+    Disks are centred on the pixel grid, so values differ slightly from
+    `intensity_multiple_points`, which centres each disk at the exact
+    sub-pixel position.
+    """
+    centers = np.asarray(centers, dtype=float)
+    kernel = disk_kernel(radius)
+    # erosion structure is 2r x 2r: keep a margin that covers both it and the disk
+    margin = 2 * int(np.ceil(radius)) + 2
+    lo = np.maximum(np.floor(centers.min(axis=0)).astype(int) - margin, 0)
+    hi = np.minimum(np.ceil(centers.max(axis=0)).astype(int) + margin + 1, image.shape)
+    # the mask may extend beyond the centres (centres sit inside the cell), so include it
+    rows, cols = np.nonzero(mask)
+    if len(rows):
+        lo = np.minimum(lo, np.maximum([rows.min() - margin, cols.min() - margin], 0))
+        hi = np.maximum(hi, np.minimum([rows.max() + margin + 1, cols.max() + margin + 1], image.shape))
+    crop = (slice(lo[0], hi[0]), slice(lo[1], hi[1]))
+    image_c = image[crop].astype(float)
+    mask_c = mask[crop]
+
+    # normalized convolution: pixels outside the image don't count, like the original
+    total = convolve(image_c, kernel.astype(float), mode="constant", cval=0.0)
+    count = convolve(np.ones_like(image_c), kernel.astype(float), mode="constant", cval=0.0)
+    # crop edges that are not image edges would also drop pixels, but the
+    # margin keeps every centre more than `radius` away from them
+    mean = total / count
+    intensities = map_coordinates(mean, (centers - lo).T, order=1, mode="nearest")
+
+    erosion = binary_erosion(mask_c, structure=np.ones((radius * 2, radius * 2)), border_value=True)
+    background = np.percentile(image_c[erosion], background_percentile)
+    return list(intensities), background
 
 
 def center_bg_norm(intensity, bg):

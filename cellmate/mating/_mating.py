@@ -494,24 +494,50 @@ class CellNetwork():
         skeletons = np.array(skeletons)
         return skeletons
 
+    def oriented_tips_overtime(self, cell_id):
+        """tips_overtime as a (T, 2, 2) float array whose tip order is kept
+        consistent across frames: skeleton endpoints come in no fixed order,
+        so each frame's pair is swapped when that matches the previous frame
+        better. Frames without a skeleton are NaN."""
+        tips = np.full((len(self.cells[cell_id].frames), 2, 2), np.nan)
+        prev = None
+        for i, tip in enumerate(self.tips_overtime(cell_id)):
+            if len(tip) != 2 or tip[0] is None:
+                continue
+            tip = np.asarray(tip, dtype=float)
+            if prev is not None:
+                keep = np.linalg.norm(tip - prev, axis=1).sum()
+                swap = np.linalg.norm(tip[::-1] - prev, axis=1).sum()
+                if swap < keep:
+                    tip = tip[::-1]
+            tips[i] = tip
+            prev = tip
+        return tips
+
     def center_tips(self, cell_id):
         """The two tip locations (skeleton endpoints), each centered
         (median position) over every frame the cell is tracked in -- a
-        stable reference for "tip 1"/"tip 2" even though a single frame's
-        raw tip positions drift/rotate and can flip order frame to frame."""
-        from cellmate.patch._utils import centre_points
-
-        tips = self.tips_overtime(cell_id)
-        center_1 = centre_points(tips[:, 0])
-        center_2 = centre_points(tips[:, 1])
-        return center_1, center_2
+        stable reference for "tip 1"/"tip 2". Uses oriented_tips_overtime
+        so a frame whose endpoints come in swapped order doesn't mix the
+        two ends into one median."""
+        tips = self.oriented_tips_overtime(cell_id)
+        if np.isnan(tips).all():
+            raise ValueError(f"cell {cell_id} has no skeleton tips in any frame")
+        center = np.nanmedian(tips, axis=0)
+        return center[0], center[1]
 
     def aligned_coords_overtime(self, cell_id, num_samples=None):
         """Like coords_overtime, but the contour is split at the cell's two
         (time-stabilized) tips and each half resampled to a fixed point
         count, so point index N refers to roughly the same physical location
         on the cell in every frame -- see CellNetworkPatch.aligned_coords,
-        which this generalizes to any CellNetwork (not just mating pairs)."""
+        which caches this.
+
+        The split uses center_tips rather than each frame's own skeleton
+        endpoints: those jump by several pixels frame to frame (skeleton
+        spurs), which makes the alignment jitter. Contours are put in one
+        winding direction first, so "half 1" is the same side of the cell in
+        every frame."""
         from cellmate.configs import CONTOURS_LENGTH
         from cellmate.patch._utils import circular_sequence, resample_curve
 
@@ -520,14 +546,16 @@ class CellNetwork():
         center_tip_1, center_tip_2 = self.center_tips(cell_id)
         coords = self.coords_overtime(cell_id)
         new_coords = []
-        for i, time in enumerate(self.cells[cell_id].frames):
-            coord_t = coords[i]
-            cell_label_t = self.label_map[time][cell_id]
-            _, tip_1_index = self.measure[time].nearest_coordinate(cell_label_t, [center_tip_1], ptype="label")
-            _, tip_2_index = self.measure[time].nearest_coordinate(cell_label_t, [center_tip_2], ptype="label")
-            tip_1_index = tip_1_index[0][0]
-            tip_2_index = tip_2_index[0][0]
+        for i in range(len(self.cells[cell_id].frames)):
+            coord_t = np.asarray(coords[i], dtype=float)
+            if _signed_area(coord_t) > 0:
+                coord_t = coord_t[::-1]
             max_id = len(coord_t)
+            tip_1_index = np.argmin(np.linalg.norm(coord_t - center_tip_1, axis=1))
+            tip_2_index = np.argmin(np.linalg.norm(coord_t - center_tip_2, axis=1))
+            if tip_1_index == tip_2_index:
+                # degenerate (round cell / bad skeleton): split at the opposite point
+                tip_2_index = (tip_1_index + max_id // 2) % max_id
             split_1 = circular_sequence(tip_1_index, tip_2_index, max_id)
             split_2 = circular_sequence(tip_2_index, tip_1_index, max_id)
             new_split1 = resample_curve(coord_t[split_1], half)
@@ -546,13 +574,15 @@ class CellNetwork():
         from cellmate.patch._utils import resample_curve
 
         num_samples = num_samples or SKELETON_LENGTH
+        tips = self.oriented_tips_overtime(cell_id)
         center_tip_1, _ = self.center_tips(cell_id)
         skeletons = self.skeleton_overtime(cell_id)
         aligned = []
-        for skeleton in skeletons:
+        for i, skeleton in enumerate(skeletons):
             skeleton = np.asarray(skeleton)
-            start_dist = np.linalg.norm(skeleton[0] - center_tip_1)
-            end_dist = np.linalg.norm(skeleton[-1] - center_tip_1)
+            tip_1 = center_tip_1 if np.isnan(tips[i]).any() else tips[i, 0]
+            start_dist = np.linalg.norm(skeleton[0] - tip_1)
+            end_dist = np.linalg.norm(skeleton[-1] - tip_1)
             if end_dist < start_dist:
                 skeleton = skeleton[::-1]
             aligned.append(resample_curve(skeleton, num_samples))
@@ -617,6 +647,13 @@ class CellNetwork():
 
 
 from scipy.spatial.distance import cdist
+def _signed_area(coords):
+    """Shoelace signed area of a closed (n, 2) contour; its sign gives the
+    winding direction."""
+    x, y = coords[:, 0], coords[:, 1]
+    return 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
+
+
 def is_mated_in_new_tip(tips_start, tips_end, point_start, point_end):
     dist_matrix = cdist(tips_start, tips_end)
     mapping = dist_matrix.argmin(axis=1)
