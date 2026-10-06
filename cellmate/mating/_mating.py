@@ -360,8 +360,8 @@ class CellNetwork():
                    measure.skeleton_length(label=label),
                    measure.medial_minor_length(label=label),
                    measure.eccentricity(label=label),
-                   len(self.neighbor_same(node=cell.id, time=time)),
-                   len(self.neighbor_diff(node=cell.id, time=time)),
+                   len(self.neighbor(node=cell.id, time=time, strain="same", competent_only=True)),
+                   len(self.neighbor(node=cell.id, time=time, strain="diff", competent_only=True)),
                    ]
         return feature
 
@@ -373,32 +373,29 @@ class CellNetwork():
                    #list(measure.tips_distance(label1, label2, ptype="label")])
         return feature
 
-    def neighbor(self, node, time):
+    def neighbor(self, node, time, strain: str = "all", competent_only: bool = False):
+        """Spatial neighbors of `node` at `time`.
+
+        strain: "all" | "same" | "diff" -- filter by strain type relative to `node`.
+        competent_only: keep only neighbors that are mating competent.
+        """
+        if strain not in ("all", "same", "diff"):
+            raise ValueError(f"strain must be 'all', 'same' or 'diff', got {strain!r}")
         net = self.space_network_t(time)
-        if node in net.nodes:
-            return list(net.neighbors(node))
-        else:
+        if node not in net.nodes:
             return []
-
-    def neighbor_diff(self, node, time):
-        nei = self.neighbor(node, time)
-        diff_nei = []
         target_type = self.cells[node].strain_type
-        for c in nei:
-            if self.cells[c].mating_competent():
-                if target_type != self.cells[c].strain_type:
-                    diff_nei.append(c)
-        return diff_nei
-
-    def neighbor_same(self, node, time):
-        nei = self.neighbor(node, time)
-        same_nei = []
-        target_type = self.cells[node].strain_type
-        for c in nei:
-            if self.cells[c].mating_competent():
-                if target_type == self.cells[c].strain_type:
-                    same_nei.append(c)
-        return same_nei
+        result = []
+        for c in net.neighbors(node):
+            cell = self.cells[c]
+            if competent_only and not cell.mating_competent():
+                continue
+            if strain == "same" and cell.strain_type != target_type:
+                continue
+            if strain == "diff" and cell.strain_type == target_type:
+                continue
+            result.append(c)
+        return result
 
     def potential_mating_feature(self, parents, time_step: int = 10):
         columns = ['ref_id', 'ref_type', 'flag', 'p_id', 'm_id',
@@ -420,7 +417,7 @@ class CellNetwork():
             end_time = cell_ref.end
             time_table = list(range(start_time, end_time, time_step)) + [end_time]
             for t in time_table:
-                mating_competent = self.neighbor_diff(node=ref, time=t)
+                mating_competent = self.neighbor(node=ref, time=t, strain="diff", competent_only=True)
                 for n in mating_competent:
                     if i == 0:
                         feature = self.pair_feature(ref, n, t)
