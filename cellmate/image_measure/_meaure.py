@@ -4,6 +4,7 @@ from functools import cached_property
 
 import numpy as np
 import pandas as pd
+from skimage.graph import MCP_Geometric
 
 from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH,
                               SKELETON_ECC_THRESHOLD)
@@ -548,32 +549,73 @@ class ImageMeasure():
                     selected.append(i)
         return selected
 
-    def __is_neighbor(self, obj1: int, obj2: int, threshold):
-        """
+    def __neighbor_distance(self, obj1: int, obj2: int, threshold, detour_ratio=1.5):
+        """Reachable distance between two regions, np.inf if not neighbors.
+
         obj1: index 1
         obj2: index 2
-        """
-        if self.distance_idx([obj1], [obj2])[0, 0, 1] > threshold:
-            return False
-        else:
-            p1, p2 = self.__nearest_point(obj1, obj2)
-            lines = create_line(p1, p2)
-            sample_value = self.data[lines[0], lines[1]]
-            flag = _isin_list(sample_value, [0, self.label(obj1), self.label(obj2)])
-            return flag
+        threshold: max straight-line nearest distance between the two contours.
+        detour_ratio: if another cell blocks the straight line, still a
+            neighbor when a path through background exists that is at most
+            detour_ratio x the unobstructed path. None: straight line only.
 
-    def is_neighbor(self, obj1: int, obj2: int, threshold: int = 100, ptype="index"):
+        Returns the straight-line nearest distance when the line is clear,
+        else that distance scaled by the detour (dist * blocked / free).
+        """
+        dist = self.distance_idx([obj1], [obj2])[0, 0, 1]
+        if dist > threshold:
+            return np.inf
+        label1, label2 = self.label(obj1), self.label(obj2)
+        p1, p2 = self.__nearest_point(obj1, obj2)
+        lines = create_line(p1, p2)
+        sample_value = self.data[lines[0], lines[1]]
+        if _isin_list(sample_value, [0, label1, label2]):
+            return dist
+        if detour_ratio is None:
+            return np.inf
+        bboxes = self.bboxes
+        ratio = _detour_ratio(self.data, label1, label2,
+                              bboxes[obj1], bboxes[obj2], dist, detour_ratio)
+        return dist * ratio if ratio <= detour_ratio else np.inf
+
+    def __is_neighbor(self, obj1: int, obj2: int, threshold, detour_ratio=1.5):
+        return np.isfinite(self.__neighbor_distance(obj1, obj2, threshold, detour_ratio))
+
+    def is_neighbor(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
+                    detour_ratio=1.5):
         obj1 = self.__index_trans(obj1, ptype)
         obj2 = self.__index_trans(obj2, ptype)
-        return self.__is_neighbor(obj1, obj2, threshold)
+        return self.__is_neighbor(obj1, obj2, threshold, detour_ratio)
 
-    def adjacent_matrix(self, threshold: int = 100):
+    def reachable_distance(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
+                           detour_ratio=1.5):
+        """Nearest contour distance between two regions, accounting for cells
+        in between: the straight-line distance when the line is clear, scaled
+        by the detour through background when it is blocked. np.inf if not
+        neighbors (see is_neighbor). For the plain straight-line distance use
+        distance().
         """
-        threshold: if > threshold, not neighbor
+        obj1 = self.__index_trans(obj1, ptype)
+        obj2 = self.__index_trans(obj2, ptype)
+        return self.__neighbor_distance(obj1, obj2, threshold, detour_ratio)
+
+    def adjacent_matrix(self, threshold: int = 100, detour_ratio=1.5, return_distance=False):
+        """
+        threshold: if straight-line nearest distance > threshold, not neighbor
+        detour_ratio: see __neighbor_distance. None: blocked straight line -> not neighbor.
+        return_distance: also return the reachable distance matrix (see
+            __neighbor_distance), np.inf for non-neighbors and on the diagonal.
+            Kept separate from the 0/1 matrix because touching cells can have
+            distance 0, which would read as "no edge".
         """
         length = len(self.labels)
-        bboxes = self.bboxes
+        # Boxes around the contour coords themselves (the points the exact
+        # distance in __is_neighbor uses), not the pixel bbox: the smoothed
+        # contour can bulge outside the pixel bbox, which would make the
+        # pre-filter below overestimate the gap and drop real neighbors.
+        bboxes = _coord_bboxes(self.coordinates)
         connected_matrix = np.zeros((length, length))
+        distance_matrix = np.full((length, length), np.inf)
         for i in range(0, length-1):
             for j in range(i+1, length):
                 # Cheap, exact lower bound first: if the two regions'
@@ -585,11 +627,14 @@ class ImageMeasure():
                 # nowhere near each other.
                 if _bbox_min_distance(bboxes[i], bboxes[j]) > threshold:
                     continue
-                if self.__is_neighbor(i, j, threshold):
+                dist = self.__neighbor_distance(i, j, threshold, detour_ratio)
+                if np.isfinite(dist):
                     connected_matrix[i, j] = 1
                     connected_matrix[j, i] = 1
-                else:
-                    continue
+                    distance_matrix[i, j] = dist
+                    distance_matrix[j, i] = dist
+        if return_distance:
+            return connected_matrix, distance_matrix
         return connected_matrix
 
     def nearest_coordinate(self,
@@ -628,6 +673,56 @@ class ImageMeasure():
         min_distance = dist_matrix.min()
         min_distance_arg = np.argmin(dist_matrix)
         return min_distance, tips_source[min_distance_arg//2], tips_target[min_distance_arg%2]
+
+
+def _detour_ratio(data, label1, label2, bbox1, bbox2, dist, detour_ratio):
+    """Shortest path from region label1 to label2 through background (0),
+    divided by the unobstructed shortest path. np.inf if no such path within
+    detour_ratio x the unobstructed one.
+
+    Both paths are pixel paths (MCP_Geometric, 8-connected) between the two
+    regions, so grid discretization cancels out in the ratio. The search is
+    cropped to the two pixel bboxes padded by the longest allowed path, so
+    no accepted path can leave the crop.
+    """
+    pad = int(np.ceil(detour_ratio * (dist + 2))) + 1
+    r0 = max(0, int(min(bbox1[0], bbox2[0])) - pad)
+    c0 = max(0, int(min(bbox1[1], bbox2[1])) - pad)
+    r1 = min(data.shape[0], int(max(bbox1[2], bbox2[2])) + pad)
+    c1 = min(data.shape[1], int(max(bbox1[3], bbox2[3])) + pad)
+    crop = data[r0:r1, c0:c1]
+    mask1 = crop == label1
+    mask2 = crop == label2
+    starts = np.argwhere(mask1)
+    ends = np.argwhere(mask2)
+    if len(starts) == 0 or len(ends) == 0:
+        return np.inf
+
+    def shortest(costs):
+        cumulative, _ = MCP_Geometric(costs).find_costs(starts, ends, find_all_ends=False)
+        return cumulative[mask2].min()
+
+    free = shortest(np.ones(crop.shape))
+    blocked = shortest(np.where((crop == 0) | mask1 | mask2, 1.0, np.inf))
+    if free == 0:  # regions touch
+        return 1.0 if np.isfinite(blocked) else np.inf
+    return blocked / free
+
+
+def _coord_bboxes(coords):
+    """[min_row, min_col, max_row, max_col] of each region's coordinate set.
+    Regions without coordinates get an infinite box, so the bbox pre-filter
+    never skips them and __is_neighbor decides as before.
+    """
+    bboxes = np.empty((len(coords), 4))
+    for i, c in enumerate(coords):
+        if c is None or len(c) == 0:
+            bboxes[i] = [-np.inf, -np.inf, np.inf, np.inf]
+        else:
+            c = np.asarray(c)
+            bboxes[i, :2] = c.min(axis=0)
+            bboxes[i, 2:] = c.max(axis=0)
+    return bboxes
 
 
 def _bbox_min_distance(bbox1, bbox2):
