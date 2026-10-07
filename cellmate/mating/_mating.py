@@ -13,6 +13,28 @@ from cellmate.configs import DIVISION
 import numpy as np
 
 
+# Short names for CellNetwork.feature; any other per-label ImageMeasure
+# method name is accepted as is.
+FEATURE_ALIASES = {
+    "length": "skeleton_length",
+    "width": "medial_minor_length",
+    "major_axis": "axis_major_length",
+    "minor_axis": "axis_minor_length",
+    "ecc": "eccentricity",
+}
+
+# Neighbor-count features: name -> (strain, competent_only) for CellNetwork.neighbor.
+NEIGHBOR_FEATURES = {
+    "neighbor": ("all", False),
+    "neighbor_same": ("same", True),
+    "neighbor_diff": ("diff", True),
+}
+
+# Per-cell columns of pair_feature (after `start`).
+PAIR_CELL_FEATURES = ["area", "skeleton_length", "medial_minor_length", "eccentricity",
+                      "neighbor_same", "neighbor_diff"]
+
+
 class CellNetwork():
     def __init__(self, image, time_network, tracker, threshold, *args, **kwargs) -> None:
         self.image = image
@@ -356,14 +378,67 @@ class CellNetwork():
         return pair_features
 
     def __cell_feature(self, cell, label, measure, time):
-        feature = [cell.start, measure.area(label=label),
-                   measure.skeleton_length(label=label),
-                   measure.medial_minor_length(label=label),
-                   measure.eccentricity(label=label),
-                   len(self.neighbor(node=cell.id, time=time, strain="same", competent_only=True)),
-                   len(self.neighbor(node=cell.id, time=time, strain="diff", competent_only=True)),
-                   ]
-        return feature
+        return [cell.start] + list(self.feature(cell.id, PAIR_CELL_FEATURES, frame=time))
+
+    def _feature_at(self, name, cell_id, time):
+        """One scalar feature of `cell_id` at `time`; see `feature`."""
+        name = FEATURE_ALIASES.get(name, name)
+        if name in NEIGHBOR_FEATURES:
+            strain, competent_only = NEIGHBOR_FEATURES[name]
+            return len(self.neighbor(node=cell_id, time=time, strain=strain,
+                                     competent_only=competent_only))
+        label = self.label_map[time].get(cell_id)
+        if label is None:
+            raise KeyError(f"cell {cell_id} is not present in frame {time}")
+        getter = getattr(self.measure[time], name, None)
+        if not callable(getter) or name.startswith("_"):
+            raise ValueError(f"unknown feature {name!r}")
+        return getter(label=label)
+
+    def feature(self, cell_id, features, frame=None):
+        """Per-cell measurements, looked up by cell id instead of going
+        through `self.measure[t].<feature>(label)` frame by frame.
+
+        Parameters
+        ----------
+        cell_id: int, global cell id (key of `self.cells`).
+        features: str or list of str. Any per-label `ImageMeasure` method
+            ("area", "eccentricity", "skeleton_length", "orientation", ...),
+            the aliases in `FEATURE_ALIASES` ("length", "width", ...), or the
+            neighbor counts in `NEIGHBOR_FEATURES`.
+        frame: None (every frame the cell is tracked in), an int, or a list
+            of ints. Listed frames the cell is absent from give NaN.
+
+        Returns
+        -------
+        int frame: scalar for one feature, pd.Series (by feature) for several.
+        otherwise: pd.Series (by frame) for one feature, pd.DataFrame
+            (frame x feature) for several.
+
+        Examples
+        --------
+        >>> net.feature(5, "area")                        # area over time
+        >>> net.feature(5, "area", frame=10)              # one value
+        >>> net.feature(5, ["area", "length", "eccentricity"])
+        """
+        single = isinstance(features, str)
+        names = [features] if single else list(features)
+
+        if frame is not None and np.ndim(frame) == 0:
+            values = [self._feature_at(n, cell_id, int(frame)) for n in names]
+            return values[0] if single else pd.Series(values, index=names, name=frame)
+
+        frames = self.cells[cell_id].frames if frame is None else frame
+        rows = {}
+        for t in frames:
+            t = int(t)
+            if cell_id not in self.label_map[t]:
+                rows[t] = [np.nan] * len(names)
+            else:
+                rows[t] = [self._feature_at(n, cell_id, t) for n in names]
+        table = pd.DataFrame.from_dict(rows, orient="index", columns=names)
+        table.index.name = "frame"
+        return table[features] if single else table
 
     def __pair_feature(self, measure, label1, label2):
         feature = list(measure.between_angle(label1, label2, ptype="label")) +\
