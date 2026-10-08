@@ -4,7 +4,9 @@ from functools import cached_property
 
 import numpy as np
 import pandas as pd
+from scipy import ndimage as ndi
 from skimage.graph import MCP_Geometric
+from skimage.segmentation import expand_labels
 
 from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH,
                               SKELETON_ECC_THRESHOLD)
@@ -38,6 +40,12 @@ class ImageMeasure():
         self.set_pixel_size()
         self.__cost = self._init_cost_matrix()
         self.trees = self.init_trees()
+
+    def __getstate__(self):
+        # the Voronoi label images are full-size; rebuilt on demand
+        state = self.__dict__.copy()
+        state.pop("_voronoi_cache", None)
+        return state
 
     def __index(self,
                 index: Union[int, Sequence] = None,
@@ -549,28 +557,73 @@ class ImageMeasure():
                     selected.append(i)
         return selected
 
-    def __neighbor_distance(self, obj1: int, obj2: int, threshold, detour_ratio=1.5):
+    def voronoi(self, threshold):
+        """Label image where every background pixel within threshold/2 of a
+        region is given to its nearest region (skimage expand_labels). Used by
+        the "voronoi" neighbor method: the gap between two first-layer cells
+        belongs to those two cells, so a cell behind them can't reach through
+        it, while cells facing each other across background meet halfway.
+        Cached per threshold."""
+        cache = self.__dict__.setdefault("_voronoi_cache", {})
+        if threshold not in cache:
+            cache[threshold] = expand_labels(self.data, distance=threshold / 2)
+        return cache[threshold]
+
+    def voronoi_contacts(self, threshold):
+        """{(label_a, label_b): border length in pixels} for every pair of
+        touching Voronoi regions (label_a < label_b). Cached per threshold."""
+        cache = self.__dict__.setdefault("_contacts_cache", {})
+        if threshold not in cache:
+            cache[threshold] = _label_contacts(self.voronoi(threshold))
+        return cache[threshold]
+
+    def __neighbor_distance(self, obj1: int, obj2: int, threshold, method="voronoi",
+                            detour_ratio=None, min_contact=1, line_margin=0.09):
         """Reachable distance between two regions, np.inf if not neighbors.
 
         obj1: index 1
         obj2: index 2
         threshold: max straight-line nearest distance between the two contours.
-        detour_ratio: if another cell blocks the straight line, still a
-            neighbor when a path through background exists that is at most
-            detour_ratio x the unobstructed path. None: straight line only.
+        method:
+            "voronoi": neighbors when their Voronoi regions (see `voronoi`)
+                share at least `min_contact` border pixels, or (open space
+                between them) when the straight line between the nearest
+                points keeps more than `line_margin` x their distance away
+                from every other region (a viewing cone: a narrow opening is
+                fine at short range, not for a cell far behind it).
+            "straight": neighbors when the straight line between the nearest
+                points crosses only background (or the two regions).
+        detour_ratio ("straight" only): if another cell blocks the straight
+            line, still a neighbor when a path through background exists that
+            is at most detour_ratio x the unobstructed path. None: straight
+            line only.
+        min_contact ("voronoi" only): min shared Voronoi border in pixels.
+        line_margin ("voronoi" only): see method; None: Voronoi contact only.
 
         Returns the straight-line nearest distance when the line is clear,
-        else that distance scaled by the detour (dist * blocked / free).
+        else that distance scaled by the detour (dist * blocked / free): for
+        "voronoi" the shortest path inside the two Voronoi regions.
         """
+        if method not in ("voronoi", "straight"):
+            raise ValueError(f"method must be 'voronoi' or 'straight', got {method!r}")
         dist = self.distance_idx([obj1], [obj2])[0, 0, 1]
         if dist > threshold:
             return np.inf
         label1, label2 = self.label(obj1), self.label(obj2)
         p1, p2 = self.__nearest_point(obj1, obj2)
         lines = create_line(p1, p2)
+        if method == "voronoi":
+            key = (min(label1, label2), max(label1, label2))
+            if self.voronoi_contacts(threshold).get(key, 0) < min_contact:
+                if line_margin is not None and _line_margin(
+                        self.data, lines, label1, label2, line_margin * dist) > line_margin * dist:
+                    return dist
+                return np.inf
         sample_value = self.data[lines[0], lines[1]]
         if _isin_list(sample_value, [0, label1, label2]):
             return dist
+        if method == "voronoi":
+            return dist * _voronoi_detour_ratio(self.data, self.voronoi(threshold), label1, label2)
         if detour_ratio is None:
             return np.inf
         bboxes = self.bboxes
@@ -578,61 +631,73 @@ class ImageMeasure():
                               bboxes[obj1], bboxes[obj2], dist, detour_ratio)
         return dist * ratio if ratio <= detour_ratio else np.inf
 
-    def __is_neighbor(self, obj1: int, obj2: int, threshold, detour_ratio=1.5):
-        return np.isfinite(self.__neighbor_distance(obj1, obj2, threshold, detour_ratio))
+    def __is_neighbor(self, obj1: int, obj2: int, threshold, method="voronoi",
+                      detour_ratio=None, min_contact=1, line_margin=0.09):
+        return np.isfinite(self.__neighbor_distance(obj1, obj2, threshold, method,
+                                                    detour_ratio, min_contact, line_margin))
 
     def is_neighbor(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
-                    detour_ratio=1.5):
+                    method="voronoi", detour_ratio=None, min_contact=1, line_margin=0.09):
+        """See __neighbor_distance for method / detour_ratio / min_contact /
+        line_margin."""
         obj1 = self.__index_trans(obj1, ptype)
         obj2 = self.__index_trans(obj2, ptype)
-        return self.__is_neighbor(obj1, obj2, threshold, detour_ratio)
+        return self.__is_neighbor(obj1, obj2, threshold, method, detour_ratio, min_contact,
+                                  line_margin)
 
     def reachable_distance(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
-                           detour_ratio=1.5):
+                           method="voronoi", detour_ratio=None, min_contact=1,
+                           line_margin=0.09):
         """Nearest contour distance between two regions, accounting for cells
         in between: the straight-line distance when the line is clear, scaled
-        by the detour through background when it is blocked. np.inf if not
-        neighbors (see is_neighbor). For the plain straight-line distance use
-        distance().
+        by the detour when it is blocked. np.inf if not neighbors (see
+        is_neighbor). For the plain straight-line distance use distance().
         """
         obj1 = self.__index_trans(obj1, ptype)
         obj2 = self.__index_trans(obj2, ptype)
-        return self.__neighbor_distance(obj1, obj2, threshold, detour_ratio)
+        return self.__neighbor_distance(obj1, obj2, threshold, method, detour_ratio, min_contact,
+                                        line_margin)
 
-    def adjacent_matrix(self, threshold: int = 100, detour_ratio=1.5, return_distance=False):
+    def adjacent_matrix(self, threshold: int = 100, method="voronoi", detour_ratio=None,
+                        min_contact=1, line_margin=0.09, return_distance=False):
         """
         threshold: if straight-line nearest distance > threshold, not neighbor
-        detour_ratio: see __neighbor_distance. None: blocked straight line -> not neighbor.
+        method, detour_ratio, min_contact, line_margin: see __neighbor_distance.
         return_distance: also return the reachable distance matrix (see
             __neighbor_distance), np.inf for non-neighbors and on the diagonal.
             Kept separate from the 0/1 matrix because touching cells can have
             distance 0, which would read as "no edge".
         """
         length = len(self.labels)
-        # Boxes around the contour coords themselves (the points the exact
-        # distance in __is_neighbor uses), not the pixel bbox: the smoothed
-        # contour can bulge outside the pixel bbox, which would make the
-        # pre-filter below overestimate the gap and drop real neighbors.
-        bboxes = _coord_bboxes(self.coordinates)
         connected_matrix = np.zeros((length, length))
         distance_matrix = np.full((length, length), np.inf)
-        for i in range(0, length-1):
-            for j in range(i+1, length):
-                # Cheap, exact lower bound first: if the two regions'
-                # bounding boxes are already farther apart than `threshold`
-                # allows, the real (expensive, per-pair nearest-neighbor
-                # search) check in __is_neighbor can only agree they're not
-                # neighbors -- skip it. This is the dominant cost for
-                # frames with many cells (O(n^2) pairs), most of which are
-                # nowhere near each other.
-                if _bbox_min_distance(bboxes[i], bboxes[j]) > threshold:
-                    continue
-                dist = self.__neighbor_distance(i, j, threshold, detour_ratio)
-                if np.isfinite(dist):
-                    connected_matrix[i, j] = 1
-                    connected_matrix[j, i] = 1
-                    distance_matrix[i, j] = dist
-                    distance_matrix[j, i] = dist
+        if method == "voronoi" and line_margin is None:
+            # only pairs whose Voronoi regions touch can be neighbors
+            pairs = []
+            for (label1, label2), contact in self.voronoi_contacts(threshold).items():
+                i, j = self.label2index(label1), self.label2index(label2)
+                if contact >= min_contact and i is not None and j is not None:
+                    pairs.append((i, j))
+        else:
+            # Boxes around the contour coords themselves (the points the exact
+            # distance uses), not the pixel bbox: the smoothed contour can
+            # bulge outside the pixel bbox, which would make the pre-filter
+            # below overestimate the gap and drop real neighbors.
+            bboxes = _coord_bboxes(self.coordinates)
+            # Cheap, exact lower bound first: if the two regions' bounding
+            # boxes are already farther apart than `threshold` allows, the
+            # real (expensive, per-pair nearest-neighbor search) check can
+            # only agree they're not neighbors -- skip it.
+            pairs = [(i, j) for i in range(length - 1) for j in range(i + 1, length)
+                     if _bbox_min_distance(bboxes[i], bboxes[j]) <= threshold]
+        for i, j in pairs:
+            dist = self.__neighbor_distance(i, j, threshold, method, detour_ratio, min_contact,
+                                            line_margin)
+            if np.isfinite(dist):
+                connected_matrix[i, j] = 1
+                connected_matrix[j, i] = 1
+                distance_matrix[i, j] = dist
+                distance_matrix[j, i] = dist
         if return_distance:
             return connected_matrix, distance_matrix
         return connected_matrix
@@ -673,6 +738,63 @@ class ImageMeasure():
         min_distance = dist_matrix.min()
         min_distance_arg = np.argmin(dist_matrix)
         return min_distance, tips_source[min_distance_arg//2], tips_target[min_distance_arg%2]
+
+
+def _label_contacts(labels):
+    """{(a, b): number of 4-connected pixel pairs where label a meets label
+    b} over all pairs of different nonzero labels, a < b."""
+    pairs = []
+    for x, y in ((labels[:, :-1], labels[:, 1:]), (labels[:-1, :], labels[1:, :])):
+        touch = (x != y) & (x > 0) & (y > 0)
+        a, b = x[touch], y[touch]
+        pairs.append(np.stack([np.minimum(a, b), np.maximum(a, b)], axis=1))
+    pairs = np.concatenate(pairs)
+    if len(pairs) == 0:
+        return {}
+    keys, counts = np.unique(pairs, axis=0, return_counts=True)
+    return {(int(a), int(b)): int(n) for (a, b), n in zip(keys, counts)}
+
+
+def _line_margin(data, line, label1, label2, max_margin):
+    """Closest approach (px) of any region other than label1 / label2 to the
+    pixels of `line`, capped at max_margin + 1 (only that range is searched)."""
+    if len(line[0]) == 0:  # nearest points coincide: nothing in between
+        return max_margin + 1
+    pad = int(np.ceil(max_margin)) + 2
+    r0, c0 = max(line[0].min() - pad, 0), max(line[1].min() - pad, 0)
+    crop = data[r0:line[0].max() + pad + 1, c0:line[1].max() + pad + 1]
+    third = (crop > 0) & (crop != label1) & (crop != label2)
+    if not third.any():
+        return max_margin + 1
+    return min(ndi.distance_transform_edt(~third)[line[0] - r0, line[1] - c0].min(), max_margin + 1)
+
+
+def _voronoi_detour_ratio(data, voronoi, label1, label2):
+    """Shortest pixel path from region label1 to label2 staying inside their
+    own Voronoi regions (so never squeezing past a third cell), divided by
+    the unobstructed shortest pixel path (octile distance between the
+    regions' nearest edge pixels). Both are 8-connected pixel paths, so grid
+    discretization cancels out in the ratio. np.inf if no such path.
+    """
+    inside = (voronoi == label1) | (voronoi == label2)
+    rows, cols = np.nonzero(inside)
+    crop = (slice(rows.min(), rows.max() + 1), slice(cols.min(), cols.max() + 1))
+    inside = inside[crop]
+    mask1 = data[crop] == label1
+    mask2 = data[crop] == label2
+    eight = np.ones((3, 3), dtype=bool)
+    # paths leave/enter a region through its edge pixels
+    edge1 = mask1 & ~ndi.binary_erosion(mask1, structure=eight)
+    edge2 = mask2 & ~ndi.binary_erosion(mask2, structure=eight)
+    starts = np.argwhere(edge1)
+    ends = np.argwhere(edge2)
+    if len(starts) == 0 or len(ends) == 0:
+        return np.inf
+    gap = np.abs(starts[:, None, :] - ends[None, :, :])
+    free = (np.abs(gap[..., 0] - gap[..., 1]) + np.sqrt(2) * gap.min(axis=2)).min()
+    cumulative, _ = MCP_Geometric(np.where(inside, 1.0, np.inf)).find_costs(
+        starts, ends, find_all_ends=False)
+    return cumulative[edge2].min() / free
 
 
 def _detour_ratio(data, label1, label2, bbox1, bbox2, dist, detour_ratio):

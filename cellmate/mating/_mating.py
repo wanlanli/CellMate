@@ -41,6 +41,8 @@ class CellNetwork():
         self.frame_number = self.image.shape[0]
         self.time_network = time_network
         self.neighbor_threshold = threshold
+        # "voronoi" (default) or "straight", see ImageMeasure.adjacent_matrix
+        self.neighbor_method = kwargs.pop("neighbor_method", "voronoi")
         self.space_net = None
 
         self.classification_params = None
@@ -61,7 +63,7 @@ class CellNetwork():
                 self.space_net_map[i] = len(self.space_network) - 1
                 continue
             else:
-                adj = measure.adjacent_matrix(threshold=threshold)
+                adj = measure.adjacent_matrix(threshold=threshold, method=self.neighbor_method)
 
                 sorted_indices = np.argsort(labels)
                 adj = adj[np.ix_(sorted_indices, sorted_indices)]
