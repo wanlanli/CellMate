@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.spatial import cKDTree
 from sklearn.neighbors import NearestNeighbors
 
 
@@ -15,12 +16,27 @@ def find_nearest_points(x, y):
 
 
 class CoordTree():
+    # scipy cKDTree: same nearest neighbors as sklearn's ball tree, without
+    # sklearn's per-query input validation (most of the time on small sets)
     def __init__(self, coord: None, top_n: int = 2) -> None:
         self.coord = coord
+        self.top_n = top_n
         if self.coord is None:
             self.tree = None
         else:
-            self.tree = NearestNeighbors(n_neighbors=top_n, algorithm='ball_tree').fit(coord)
+            self.tree = cKDTree(np.asarray(coord, dtype=float))
+
+    def __setstate__(self, state):
+        # objects pickled with the old sklearn tree: rebuild as cKDTree
+        self.__dict__.update(state)
+        self.top_n = state.get("top_n") or getattr(state.get("tree"), "n_neighbors", 2)
+        if self.coord is not None and not isinstance(self.tree, cKDTree):
+            self.tree = cKDTree(np.asarray(self.coord, dtype=float))
+
+    def _query(self, x):
+        k = min(self.top_n, self.tree.n)
+        distances, index = self.tree.query(np.asarray(x, dtype=float), k=k)
+        return distances.reshape(len(x), k), index.reshape(len(x), k)
 
     def nearest(self, x):
         """
@@ -45,7 +61,7 @@ class CoordTree():
         """
         if self.coord is None:
             return None
-        distances, index = self.tree.kneighbors(x)
+        distances, index = self._query(x)
         dis = np.min(distances)
         ind = np.argmin(distances)
         return dis, ind, index[ind][0]
@@ -71,5 +87,5 @@ class CoordTree():
         """
         if self.coord is None:
             return None
-        distances, index = self.tree.kneighbors(x)
+        distances, index = self._query(x)
         return distances[:, :top_n], index[:, :top_n]

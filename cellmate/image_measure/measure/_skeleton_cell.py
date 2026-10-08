@@ -505,12 +505,63 @@ def perpendicular_grid(skeleton, coords):
         A 3D array of shape (m, 2, 2), where m is the number of perpendicular lines found. Each 2D array 
         represents two points (x, y) defining a perpendicular line that intersects with the boundary.
     """
-    grid = []
-    for i in range(0, len(skeleton)-1):
-        data = perpendicular(skeleton[i], skeleton[i+1], coords)
-        if data is not None:
-            grid.append(data)
-    return np.array(grid)
+    # Vectorized over all skeleton segments: same arithmetic as calling
+    # perpendicular(skeleton[i], skeleton[i+1], coords) for each i.
+    skeleton = np.asarray(skeleton, dtype=float)
+    if len(skeleton) < 2:
+        return np.array([])
+    p1, p2 = skeleton[:-1], skeleton[1:]
+    x1, y1, x2, y2 = p1[:, 0], p1[:, 1], p2[:, 0], p2[:, 1]
+    # perpendicular_line_through_midpoint
+    dx = x2 - x1
+    with np.errstate(divide="ignore", invalid="ignore"):
+        m = np.where(dx != 0, (y2 - y1) / dx, np.inf)
+        m_perp = np.where((m != 0) & (m != np.inf), -1 / m, np.where(m == np.inf, 0.0, np.inf))
+    xm = (x1 + x2) / 2
+    ym = (y1 + y2) / 2
+    vertical = m_perp == np.inf
+    x3 = np.where(vertical, xm, xm - 1)
+    x4 = np.where(vertical, xm, xm + 1)
+    with np.errstate(invalid="ignore"):
+        y3 = np.where(vertical, ym - 1, m_perp * (x3 - xm) + ym)
+        y4 = np.where(vertical, ym + 1, m_perp * (x4 - xm) + ym)
+    mid = np.stack([xm, ym], axis=1)
+    start_a, ok_a = _ray_intersections(mid, np.stack([x3, y3], axis=1), coords)
+    start_b, ok_b = _ray_intersections(mid, np.stack([x4, y4], axis=1), coords)
+    ok = ok_a & ok_b
+    if not ok.any():
+        return np.array([])
+    return np.stack([start_a[ok], start_b[ok]], axis=1)
+
+
+def _ray_intersections(p1, p2, border_points):
+    """find_intersection for many (p1, p2) rays at once: rows of p1 / p2 are
+    the rays. Returns (points, found) -- the closest intersection per ray and
+    whether one exists."""
+    border = np.asarray(border_points, dtype=float)
+    n = len(p1)
+    if len(border) == 0:
+        return np.full((n, 2), np.nan), np.zeros(n, dtype=bool)
+    x1, y1 = p1[:, 0:1], p1[:, 1:2]
+    x2, y2 = p2[:, 0:1], p2[:, 1:2]
+    nxt = np.roll(border, -1, axis=0)
+    x3, y3 = border[None, :, 0], border[None, :, 1]
+    x4, y4 = nxt[None, :, 0], nxt[None, :, 1]
+
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    valid = denom != 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
+        valid &= (0 <= t) & (0 <= u) & (u <= 1)
+        ix = x1 + t * (x2 - x1)
+        iy = y1 + t * (y2 - y1)
+        valid &= (ix - x1) * (x2 - x1) + (iy - y1) * (y2 - y1) > 0
+    found = valid.any(axis=1)
+    # closest intersection (smallest t; first edge wins ties)
+    k = np.argmin(np.where(valid, t, np.inf), axis=1)
+    rows = np.arange(n)
+    return np.stack([ix[rows, k], iy[rows, k]], axis=1), found
 
 
 def perpendicular_line_through_midpoint(p1, p2):
