@@ -7,6 +7,11 @@ RESOLUTION = 1
 # (branched, or eccentricity >= threshold) uses the thin+prune+extrapolate
 # method.
 SKELETON_ECC_THRESHOLD = 0.8
+# Neighbors: default max nearest-contour distance between two neighbor
+# cells -- NEIGHBOR_DISTANCE_UM (about two cell lengths) converted to pixels
+# with pixel_size when it is set, else NEIGHBOR_DISTANCE_PX.
+NEIGHBOR_DISTANCE_UM = 12
+NEIGHBOR_DISTANCE_PX = 100
 # Segment:
 # # The segmentation model generates a label that encodes both a semantic label and an instance label.
 # # The semantic label represents the class or type of the object (e.g., different cell types or structures).

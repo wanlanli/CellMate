@@ -36,10 +36,12 @@ PAIR_CELL_FEATURES = ["area", "skeleton_length", "medial_minor_length", "eccentr
 
 
 class CellNetwork():
-    def __init__(self, image, time_network, tracker, threshold, *args, **kwargs) -> None:
+    def __init__(self, image, time_network, tracker, threshold=None, *args, **kwargs) -> None:
         self.image = image
         self.frame_number = self.image.shape[0]
         self.time_network = time_network
+        # neighbor distance in px; None: ImageMeasure.neighbor_distance (12 um
+        # converted with pixel_size, or 100 px without one), set below
         self.neighbor_threshold = threshold
         # "voronoi" (default) or "straight", see ImageMeasure.adjacent_matrix
         self.neighbor_method = kwargs.pop("neighbor_method", "voronoi")
@@ -58,6 +60,9 @@ class CellNetwork():
             mask = self.image[i]
             measure = ImageMeasure(mask, *args, **kwargs)
             self.measure.append(measure)
+            if self.neighbor_threshold is None:
+                self.neighbor_threshold = measure.neighbor_distance
+            threshold = self.neighbor_threshold
             labels = measure.labels % DIVISION
             if set(labels) == last_labels:
                 self.space_net_map[i] = len(self.space_network) - 1
@@ -99,7 +104,8 @@ class CellNetwork():
             self.label_map.append(self.label_trans(t))
 
     @classmethod
-    def from_tracked_movie(cls, tracked_image, tracking_threshold, threshold, min_hist=1, max_miss=1, *args, **kwargs):
+    def from_tracked_movie(cls, tracked_image, tracking_threshold, threshold=None, min_hist=1, max_miss=1,
+                           *args, **kwargs):
         """Build a CellNetwork straight from an already-tracked label movie
         (e.g. the mask channel of a saved tracked `.tif`), by re-tracking it
         to reconstruct the division/fusion relationships instead of
@@ -111,8 +117,9 @@ class CellNetwork():
         tracked_image: the tracked label movie, [T, H, W].
         tracking_threshold: IoU threshold for the retrace -- use the same
             value the tracking pass that produced `tracked_image` used.
-        threshold: neighbor/adjacency threshold, passed straight through to
-            `__init__` (same meaning as calling it directly).
+        threshold: neighbor/adjacency threshold in px, passed straight
+            through to `__init__`; None: 12 um converted with `pixel_size`
+            (100 px without one).
         min_hist, max_miss: passed to the retrace; defaults (1, 1) assume
             `tracked_image` is already a clean, gap-filled delivery.
         """

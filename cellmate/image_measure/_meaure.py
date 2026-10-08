@@ -9,7 +9,7 @@ from skimage.graph import MCP_Geometric
 from skimage.segmentation import expand_labels
 
 from cellmate.configs import (IMAGE_MEASURE_PARAM, CELL_IMAGE_PARAM, DIVISION, CONTOURS_LENGTH, SKELETON_LENGTH,
-                              SKELETON_ECC_THRESHOLD)
+                              SKELETON_ECC_THRESHOLD, NEIGHBOR_DISTANCE_UM, NEIGHBOR_DISTANCE_PX)
 from .measure._regionprops import regionprops_table
 from .measure import CoordTree
 from cellmate.utils import create_line, angle_of_vectors, included_angle, hash_func
@@ -493,17 +493,28 @@ class ImageMeasure():
         return target_point, source_point
 
     # neighbor nodes
+    @property
+    def neighbor_distance(self):
+        """Default neighbor threshold in px: NEIGHBOR_DISTANCE_UM (12 um, about
+        two cell lengths) converted with pixel_size, or NEIGHBOR_DISTANCE_PX
+        (100 px) when pixel_size isn't set (1)."""
+        if self.pixel_size and self.pixel_size != 1:
+            return NEIGHBOR_DISTANCE_UM / self.pixel_size
+        return NEIGHBOR_DISTANCE_PX
+
     def neighbor(self, center: int,
                  targets: Union[int, Sequence[int]] = None,
-                 ptype="index", threshold: int = 100, method="voronoi",
+                 ptype="index", threshold=None, method="voronoi",
                  min_contact=1, line_margin=0.09):
         """Neighbors of `center` (see is_neighbor for the rule and parameters).
 
         center: int, index or label
         targets: int or list, index or label: only test these (default: all).
+        threshold: max nearest distance in px; None: `neighbor_distance`.
 
         Returns indices (ptype="index") or labels (ptype="label") of neighbors.
         """
+        threshold = self.neighbor_distance if threshold is None else threshold
         center = self.__index_trans(center, ptype)
         if center is None:
             return None
@@ -584,35 +595,40 @@ class ImageMeasure():
             return dist * _voronoi_detour_ratio(self.data, self.voronoi(threshold), label1, label2)
         return np.inf
 
-    def is_neighbor(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
+    def is_neighbor(self, obj1: int, obj2: int, threshold=None, ptype="index",
                     method="voronoi", min_contact=1, line_margin=0.09):
-        """See __neighbor_distance for method / min_contact / line_margin."""
+        """See __neighbor_distance for method / min_contact / line_margin;
+        threshold defaults to `neighbor_distance`."""
+        threshold = self.neighbor_distance if threshold is None else threshold
         obj1 = self.__index_trans(obj1, ptype)
         obj2 = self.__index_trans(obj2, ptype)
         return np.isfinite(self.__neighbor_distance(obj1, obj2, threshold, method, min_contact,
                                                     line_margin))
 
-    def reachable_distance(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
+    def reachable_distance(self, obj1: int, obj2: int, threshold=None, ptype="index",
                            method="voronoi", min_contact=1, line_margin=0.09):
         """Nearest contour distance between two regions, accounting for cells
         in between: the straight-line distance when the line is clear, scaled
         by the detour when it is blocked. np.inf if not neighbors (see
         is_neighbor). For the plain straight-line distance use distance().
         """
+        threshold = self.neighbor_distance if threshold is None else threshold
         obj1 = self.__index_trans(obj1, ptype)
         obj2 = self.__index_trans(obj2, ptype)
         return self.__neighbor_distance(obj1, obj2, threshold, method, min_contact, line_margin)
 
-    def adjacent_matrix(self, threshold: int = 100, method="voronoi", min_contact=1,
+    def adjacent_matrix(self, threshold=None, method="voronoi", min_contact=1,
                         line_margin=0.09, return_distance=False):
         """
-        threshold: if straight-line nearest distance > threshold, not neighbor
+        threshold: if straight-line nearest distance (px) > threshold, not
+            neighbor. None: `neighbor_distance`.
         method, min_contact, line_margin: see __neighbor_distance.
         return_distance: also return the reachable distance matrix (see
             __neighbor_distance), np.inf for non-neighbors and on the diagonal.
             Kept separate from the 0/1 matrix because touching cells can have
             distance 0, which would read as "no edge".
         """
+        threshold = self.neighbor_distance if threshold is None else threshold
         length = len(self.labels)
         connected_matrix = np.zeros((length, length))
         distance_matrix = np.full((length, length), np.inf)
