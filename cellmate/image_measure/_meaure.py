@@ -56,10 +56,8 @@ class ImageMeasure():
         if index is not None:
             if label is None:
                 return self.__index_check(index)
-            else:
-                Warning("`index` and `label` cannot be specified at the same time," +
-                        "the calculation is based on `index` only")
-                return index
+            # both given: `index` wins
+            return index
         else:
             if label is None:
                 raise (ValueError("`index` and `label` cannot be None at the same time"))
@@ -77,10 +75,7 @@ class ImageMeasure():
 
     def __index_check(self, index: Union[int, Sequence[int]]):
         if isinstance(index, Iterable):
-            index_n = [i for i in index if i < self._properties.shape[0]]
-            if len(index_n) != len(index):
-                Warning("Some `index` not exist!")
-            return index_n
+            return [i for i in index if i < self._properties.shape[0]]
         else:
             if index < self._properties.shape[0]:
                 return index
@@ -90,8 +85,8 @@ class ImageMeasure():
     def label2index(self, label: Union[int, Sequence]):
         """image label to arg
         """
-        if isinstance(label, int):
-            return self.__hash_obj.get(label)
+        if isinstance(label, (int, np.integer)):
+            return self.__hash_obj.get(int(label))
         else:
             return [self.__hash_obj.get(k) for k in label if self.__hash_obj.get(k) is not None]
 
@@ -166,12 +161,12 @@ class ImageMeasure():
 
     @property
     def geometry_centers(self):
-        colum = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.CENTER]
+        colum = [self.__hash_col.get(i) for i in CELL_IMAGE_PARAM.CENTER_LIST]
         return self._properties[:, colum]
 
     def geometry_center(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.centers[index]
+        return self.geometry_centers[index]
 
     @property
     def orientations(self):
@@ -228,7 +223,8 @@ class ImageMeasure():
 
     def coordinate(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.coordinates[index]
+        # one cell's entry, without building the whole `coordinates` list
+        return self._properties[index, self.__hash_col.get(CELL_IMAGE_PARAM.COORDINATE)]
 
     @property
     def skeleton_minor_grids(self):
@@ -244,7 +240,7 @@ class ImageMeasure():
 
     def skeleton(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.skeletons[index]
+        return self._properties[index, self.__hash_col.get(CELL_IMAGE_PARAM.SKELETON)]
 
     @property
     def skeleton_lengths(self):
@@ -308,23 +304,17 @@ class ImageMeasure():
 
     @property
     def tips(self):
-        tips = []
-        for s in self.skeletons:
-            if s is None:
-                tips.append([None])
-            else:
-                tips.append([s[0], s[-1]])
-        return tips
+        return [_skeleton_tips(s) for s in self.skeletons]
 
     def tip(self, index=None, label=None):
         index = self.__index(index, label)
-        return self.tips[index]
+        return _skeleton_tips(self.skeleton(index=index))
 
     def tip_index(self, index=None, label=None):
-        tips = self.tip(index, label)
-        coord = self.coordinate(index, label)
-        _, index = CoordTree(coord, top_n=1).topn(tips)
-        return index
+        index = self.__index(index, label)
+        # nearest contour point to each tip, from the cell's prebuilt tree
+        _, nearest = self.trees[index].topn(self.tip(index=index), top_n=1)
+        return nearest
 
     def _init_cost_matrix(self):
         """Initialize the distance matrix as -1
@@ -338,6 +328,7 @@ class ImageMeasure():
         cost[:, :, 2:] = cost[:, :, 2:].astype(np.int_)
         cost[:, :, :] = -1
         self.__cost = cost
+        return cost
 
     def cost(self):
         return self.__cost
@@ -346,7 +337,7 @@ class ImageMeasure():
         """Given two regions' label, return 2 types distance between 2 regions.
         source & target should be index list
         """
-        if self.__cost is None:
+        if self.__cost is None:  # objects pickled before the matrix was built in __init__
             self._init_cost_matrix()
         for index_x in sources:
             for index_y in targets:
@@ -363,13 +354,7 @@ class ImageMeasure():
         return data
 
     def __distance_exist(self, x, y) -> bool:
-        if self.__cost is not None:
-            if self.__cost[x, y, 0] > 0:
-                return True
-            else:
-                return False
-        else:
-            return False
+        return self.__cost[x, y, 0] > 0
 
     def __cal_two_regions_distance(self, target: int, source: int):
         """Given two regions' label, return 2 types distance between 2 regions.
@@ -510,51 +495,28 @@ class ImageMeasure():
     # neighbor nodes
     def neighbor(self, center: int,
                  targets: Union[int, Sequence[int]] = None,
-                 ptype="index"):
-        """Return first layer of neighbor for center object.
+                 ptype="index", threshold: int = 100, method="voronoi",
+                 min_contact=1, line_margin=0.09):
+        """Neighbors of `center` (see is_neighbor for the rule and parameters).
 
-        Parameters
-        ----------
         center: int, index or label
-        targets: int or list, index or label for the target neighbor range.
+        targets: int or list, index or label: only test these (default: all).
 
-        Returns
-        ----------
-        neibor: the Dataframe of neighbor regions.
+        Returns indices (ptype="index") or labels (ptype="label") of neighbors.
         """
         center = self.__index_trans(center, ptype)
         if center is None:
             return None
-        if targets is not None:
-            targets = self.__index_trans(targets, ptype)
-        neibor = self.__neighbor_node(center, targets)
-        if ptype == "label":
-            neibor = self.labels[neibor]
-        return neibor
-
-    def __neighbor_node(self, center: int,
-                        targets: Union[int, Sequence[int]] = None):
-        """Return the first layer closed regions.
-        center: index
-        targets: index(s), set the region of neibor.
-        """
-        # 最近点的连线若有其他细胞，则不算第一层
         if targets is None:
-            neiber = np.arange(self._properties.shape[0])
+            targets = range(self._properties.shape[0])
         else:
-            neiber = targets
-        selected = []
-        for i in neiber:
-            if i != center:
-                near_points = self.__nearest_point(center, i)
-                sample_points = create_line(near_points[0], near_points[1])
-                sample_value = self.data[sample_points[0],
-                                                sample_points[1]]
-                source_value = [self.label(center),
-                                self.label(i), 0]
-                flag = _isin_list(sample_value, source_value)
-                if flag:
-                    selected.append(i)
+            targets = self.__index_trans(targets, ptype)
+            if not isinstance(targets, Iterable):
+                targets = [targets]
+        selected = [i for i in targets if i != center and np.isfinite(
+            self.__neighbor_distance(center, i, threshold, method, min_contact, line_margin))]
+        if ptype == "label":
+            return self.labels[selected]
         return selected
 
     def voronoi(self, threshold):
@@ -578,7 +540,7 @@ class ImageMeasure():
         return cache[threshold]
 
     def __neighbor_distance(self, obj1: int, obj2: int, threshold, method="voronoi",
-                            detour_ratio=None, min_contact=1, line_margin=0.09):
+                            min_contact=1, line_margin=0.09):
         """Reachable distance between two regions, np.inf if not neighbors.
 
         obj1: index 1
@@ -593,25 +555,21 @@ class ImageMeasure():
                 fine at short range, not for a cell far behind it).
             "straight": neighbors when the straight line between the nearest
                 points crosses only background (or the two regions).
-        detour_ratio ("straight" only): if another cell blocks the straight
-            line, still a neighbor when a path through background exists that
-            is at most detour_ratio x the unobstructed path. None: straight
-            line only.
         min_contact ("voronoi" only): min shared Voronoi border in pixels.
         line_margin ("voronoi" only): see method; None: Voronoi contact only.
 
-        Returns the straight-line nearest distance when the line is clear,
-        else that distance scaled by the detour (dist * blocked / free): for
-        "voronoi" the shortest path inside the two Voronoi regions.
+        Returns the straight-line nearest distance when the line is clear;
+        for "voronoi" when blocked, that distance scaled by the detour
+        through the two Voronoi regions (dist * path / free).
         """
         if method not in ("voronoi", "straight"):
             raise ValueError(f"method must be 'voronoi' or 'straight', got {method!r}")
-        dist = self.distance_idx([obj1], [obj2])[0, 0, 1]
+        # center dist, nearest dist, nearest point index in obj1, in obj2
+        _, dist, k1, k2 = self.distance_idx([obj1], [obj2])[0, 0]
         if dist > threshold:
             return np.inf
         label1, label2 = self.label(obj1), self.label(obj2)
-        p1, p2 = self.__nearest_point(obj1, obj2)
-        lines = create_line(p1, p2)
+        lines = create_line(self.coordinate(index=obj1)[k1], self.coordinate(index=obj2)[k2])
         if method == "voronoi":
             key = (min(label1, label2), max(label1, label2))
             if self.voronoi_contacts(threshold).get(key, 0) < min_contact:
@@ -624,30 +582,18 @@ class ImageMeasure():
             return dist
         if method == "voronoi":
             return dist * _voronoi_detour_ratio(self.data, self.voronoi(threshold), label1, label2)
-        if detour_ratio is None:
-            return np.inf
-        bboxes = self.bboxes
-        ratio = _detour_ratio(self.data, label1, label2,
-                              bboxes[obj1], bboxes[obj2], dist, detour_ratio)
-        return dist * ratio if ratio <= detour_ratio else np.inf
-
-    def __is_neighbor(self, obj1: int, obj2: int, threshold, method="voronoi",
-                      detour_ratio=None, min_contact=1, line_margin=0.09):
-        return np.isfinite(self.__neighbor_distance(obj1, obj2, threshold, method,
-                                                    detour_ratio, min_contact, line_margin))
+        return np.inf
 
     def is_neighbor(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
-                    method="voronoi", detour_ratio=None, min_contact=1, line_margin=0.09):
-        """See __neighbor_distance for method / detour_ratio / min_contact /
-        line_margin."""
+                    method="voronoi", min_contact=1, line_margin=0.09):
+        """See __neighbor_distance for method / min_contact / line_margin."""
         obj1 = self.__index_trans(obj1, ptype)
         obj2 = self.__index_trans(obj2, ptype)
-        return self.__is_neighbor(obj1, obj2, threshold, method, detour_ratio, min_contact,
-                                  line_margin)
+        return np.isfinite(self.__neighbor_distance(obj1, obj2, threshold, method, min_contact,
+                                                    line_margin))
 
     def reachable_distance(self, obj1: int, obj2: int, threshold: int = 100, ptype="index",
-                           method="voronoi", detour_ratio=None, min_contact=1,
-                           line_margin=0.09):
+                           method="voronoi", min_contact=1, line_margin=0.09):
         """Nearest contour distance between two regions, accounting for cells
         in between: the straight-line distance when the line is clear, scaled
         by the detour when it is blocked. np.inf if not neighbors (see
@@ -655,14 +601,13 @@ class ImageMeasure():
         """
         obj1 = self.__index_trans(obj1, ptype)
         obj2 = self.__index_trans(obj2, ptype)
-        return self.__neighbor_distance(obj1, obj2, threshold, method, detour_ratio, min_contact,
-                                        line_margin)
+        return self.__neighbor_distance(obj1, obj2, threshold, method, min_contact, line_margin)
 
-    def adjacent_matrix(self, threshold: int = 100, method="voronoi", detour_ratio=None,
-                        min_contact=1, line_margin=0.09, return_distance=False):
+    def adjacent_matrix(self, threshold: int = 100, method="voronoi", min_contact=1,
+                        line_margin=0.09, return_distance=False):
         """
         threshold: if straight-line nearest distance > threshold, not neighbor
-        method, detour_ratio, min_contact, line_margin: see __neighbor_distance.
+        method, min_contact, line_margin: see __neighbor_distance.
         return_distance: also return the reachable distance matrix (see
             __neighbor_distance), np.inf for non-neighbors and on the diagonal.
             Kept separate from the 0/1 matrix because touching cells can have
@@ -691,8 +636,7 @@ class ImageMeasure():
             pairs = [(i, j) for i in range(length - 1) for j in range(i + 1, length)
                      if _bbox_min_distance(bboxes[i], bboxes[j]) <= threshold]
         for i, j in pairs:
-            dist = self.__neighbor_distance(i, j, threshold, method, detour_ratio, min_contact,
-                                            line_margin)
+            dist = self.__neighbor_distance(i, j, threshold, method, min_contact, line_margin)
             if np.isfinite(dist):
                 connected_matrix[i, j] = 1
                 connected_matrix[j, i] = 1
@@ -738,6 +682,13 @@ class ImageMeasure():
         min_distance = dist_matrix.min()
         min_distance_arg = np.argmin(dist_matrix)
         return min_distance, tips_source[min_distance_arg//2], tips_target[min_distance_arg%2]
+
+
+def _skeleton_tips(skeleton):
+    """The two skeleton endpoints, or [None] without a skeleton."""
+    if skeleton is None:
+        return [None]
+    return [skeleton[0], skeleton[-1]]
 
 
 def _label_contacts(labels):
@@ -797,44 +748,10 @@ def _voronoi_detour_ratio(data, voronoi, label1, label2):
     return cumulative[edge2].min() / free
 
 
-def _detour_ratio(data, label1, label2, bbox1, bbox2, dist, detour_ratio):
-    """Shortest path from region label1 to label2 through background (0),
-    divided by the unobstructed shortest path. np.inf if no such path within
-    detour_ratio x the unobstructed one.
-
-    Both paths are pixel paths (MCP_Geometric, 8-connected) between the two
-    regions, so grid discretization cancels out in the ratio. The search is
-    cropped to the two pixel bboxes padded by the longest allowed path, so
-    no accepted path can leave the crop.
-    """
-    pad = int(np.ceil(detour_ratio * (dist + 2))) + 1
-    r0 = max(0, int(min(bbox1[0], bbox2[0])) - pad)
-    c0 = max(0, int(min(bbox1[1], bbox2[1])) - pad)
-    r1 = min(data.shape[0], int(max(bbox1[2], bbox2[2])) + pad)
-    c1 = min(data.shape[1], int(max(bbox1[3], bbox2[3])) + pad)
-    crop = data[r0:r1, c0:c1]
-    mask1 = crop == label1
-    mask2 = crop == label2
-    starts = np.argwhere(mask1)
-    ends = np.argwhere(mask2)
-    if len(starts) == 0 or len(ends) == 0:
-        return np.inf
-
-    def shortest(costs):
-        cumulative, _ = MCP_Geometric(costs).find_costs(starts, ends, find_all_ends=False)
-        return cumulative[mask2].min()
-
-    free = shortest(np.ones(crop.shape))
-    blocked = shortest(np.where((crop == 0) | mask1 | mask2, 1.0, np.inf))
-    if free == 0:  # regions touch
-        return 1.0 if np.isfinite(blocked) else np.inf
-    return blocked / free
-
-
 def _coord_bboxes(coords):
     """[min_row, min_col, max_row, max_col] of each region's coordinate set.
     Regions without coordinates get an infinite box, so the bbox pre-filter
-    never skips them and __is_neighbor decides as before.
+    never skips them and the exact check decides.
     """
     bboxes = np.empty((len(coords), 4))
     for i, c in enumerate(coords):
