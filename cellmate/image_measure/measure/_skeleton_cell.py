@@ -361,24 +361,31 @@ def find_intersection(p1, p2, border_points):
         The (x, y) coordinates of the closest intersection point between the 
         line segment and the polygon. If no intersection is found, returns None.
     """
+    # Vectorized over all polygon edges; same arithmetic as _line_intersection.
     x1, y1 = p1
     x2, y2 = p2
-    direction_vector = np.array(p2) - np.array(p1)
-    intersections = []
+    border = np.asarray(border_points, dtype=float)
+    if len(border) == 0:
+        return None
+    x3, y3 = border[:, 0], border[:, 1]
+    nxt = np.roll(border, -1, axis=0)  # wraps around to the first point
+    x4, y4 = nxt[:, 0], nxt[:, 1]
 
-    for i in range(len(border_points)):
-        x3, y3 = border_points[i]
-        x4, y4 = border_points[(i + 1) % len(border_points)]  # Ensure it wraps around to the first point
-        intersection = _line_intersection(x1, y1, x2, y2, x3, y3, x4, y4)
-        if intersection is not None:
-            if np.dot(np.array(intersection)[:2] - np.array(p1), direction_vector) > 0:
-                intersections.append(intersection)
-            # intersections.append(intersection)
-    if intersections:
-        # Sort by parameter t to find the closest intersection
-        intersections.sort(key=lambda x: x[2])
-        return intersections[0][:2]  # Return the closest intersection point
-    return None
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    valid = denom != 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom
+    valid &= (0 <= t) & (0 <= u) & (u <= 1)
+    ix = x1 + t * (x2 - x1)
+    iy = y1 + t * (y2 - y1)
+    # keep only intersections ahead of p1 along p1 -> p2
+    valid &= (ix - x1) * (x2 - x1) + (iy - y1) * (y2 - y1) > 0
+    if not valid.any():
+        return None
+    # closest intersection (smallest t; first edge wins ties)
+    i = np.flatnonzero(valid)[np.argmin(t[valid])]
+    return (ix[i], iy[i])
 
 
 def _line_intersection(x1, y1, x2, y2, x3, y3, x4, y4):
