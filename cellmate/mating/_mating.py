@@ -31,8 +31,17 @@ NEIGHBOR_FEATURES = {
 }
 
 # Per-cell columns of pair_feature (after `start`).
-PAIR_CELL_FEATURES = ["area", "skeleton_length", "medial_minor_length", "eccentricity",
-                      "neighbor_same", "neighbor_diff"]
+PAIR_CELL_SHAPE_FEATURES = ["area", "skeleton_length", "medial_minor_length", "eccentricity"]
+PAIR_CELL_FEATURES = PAIR_CELL_SHAPE_FEATURES + ["neighbor_same", "neighbor_diff"]
+
+# Columns of potential_mating_feature.
+MATING_FEATURE_COLUMNS = [
+    'ref_id', 'ref_type', 'flag', 'p_id', 'm_id',
+    'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
+    'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
+    'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
+    'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip',
+    'time_stamp']
 
 
 class CellNetwork():
@@ -55,30 +64,22 @@ class CellNetwork():
         self.space_net_map = {}
         self.cells = {}
         self.fluorescent_intensity = None
-        last_labels = set([])
         for i in trange(0, self.image.shape[0]):
             mask = self.image[i]
             measure = ImageMeasure(mask, *args, **kwargs)
             self.measure.append(measure)
             if self.neighbor_threshold is None:
                 self.neighbor_threshold = measure.neighbor_distance
-            threshold = self.neighbor_threshold
+            # every frame gets its own neighbor graph: cells move and grow
+            # even when the set of cells doesn't change
             labels = measure.labels % DIVISION
-            if set(labels) == last_labels:
-                self.space_net_map[i] = len(self.space_network) - 1
-                continue
-            else:
-                adj = measure.adjacent_matrix(threshold=threshold, method=self.neighbor_method)
-
-                sorted_indices = np.argsort(labels)
-                adj = adj[np.ix_(sorted_indices, sorted_indices)]
-
-                pandas = pd.DataFrame(adj, index=labels[sorted_indices], columns=labels[sorted_indices])
-                space_network = nx.from_pandas_adjacency(pandas)
-                self.space_network.append(space_network)
-                self.space_net_map[i] = len(self.space_network) - 1
-
-                last_labels = set(labels)
+            adj = measure.adjacent_matrix(threshold=self.neighbor_threshold, method=self.neighbor_method)
+            sorted_indices = np.argsort(labels)
+            adj = adj[np.ix_(sorted_indices, sorted_indices)]
+            pandas = pd.DataFrame(adj, index=labels[sorted_indices], columns=labels[sorted_indices])
+            self.space_network.append(nx.from_pandas_adjacency(pandas))
+            # frame -> graph index (identity now; older pickles share graphs)
+            self.space_net_map[i] = len(self.space_network) - 1
 
         # for c in tracker:
         #     if time_network.has_node(c.id):
@@ -371,7 +372,7 @@ class CellNetwork():
         cell_p = self.cells[p_label]
         cell_m = self.cells[m_label]
         measure = self.measure[time]
-        id_label_map = dict(zip(measure.labels % DIVISION, measure.labels))
+        id_label_map = self.label_map[time]
         f_1 = self.__cell_feature(cell_p, id_label_map[cell_p.id], measure, time)
         f_2 = self.__cell_feature(cell_m, id_label_map[cell_m.id], measure, time)
         f_pair = self.__pair_feature(measure, id_label_map[cell_p.id], id_label_map[cell_m.id])
@@ -387,7 +388,12 @@ class CellNetwork():
         return pair_features
 
     def __cell_feature(self, cell, label, measure, time):
-        return [cell.start] + list(self.feature(cell.id, PAIR_CELL_FEATURES, frame=time))
+        shape = list(self.feature(cell.id, PAIR_CELL_SHAPE_FEATURES, frame=time))
+        # neighbor_same / neighbor_diff from one neighbor lookup
+        competent = self.neighbor(node=cell.id, time=time, competent_only=True)
+        same = sum(self.cells[c].strain_type == cell.strain_type for c in competent)
+        # as one float Series, like feature(PAIR_CELL_FEATURES) returns
+        return [cell.start] + list(pd.Series(shape + [same, len(competent) - same], dtype=float))
 
     def _feature_at(self, name, cell_id, time):
         """One scalar feature of `cell_id` at `time`; see `feature`."""
@@ -482,19 +488,13 @@ class CellNetwork():
         return result
 
     def potential_mating_feature(self, parents, time_step: int = 10):
-        columns = ['ref_id', 'ref_type', 'flag', 'p_id', 'm_id',
-                   'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
-                   'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
-                   'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm', 
-                   'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip', 
-                   'time_stamp']
         if self.cells[parents[0]].strain_type == self.cells[parents[1]].strain_type:
             print("same type")
             return None
+        parents = list(parents)  # reorder a copy, not the caller's list
         if self.cells[parents[0]].strain_type > self.cells[parents[1]].strain_type:
             parents.reverse()
-        data = pd.DataFrame(None, columns=columns)
-        index = 0
+        rows = []
         for i, ref in enumerate(parents):
             cell_ref = self.cells[ref]
             start_time = cell_ref.start
@@ -507,13 +507,9 @@ class CellNetwork():
                         feature = self.pair_feature(ref, n, t)
                     else:
                         feature = self.pair_feature(n, ref, t)
-                    if n == parents[1-i]:
-                        flag = True
-                    else:
-                        flag = False
-                    data.loc[index] = [ref, cell_ref.strain_type, flag]+feature
-                    index += 1
-        return data
+                    flag = n == parents[1-i]
+                    rows.append([ref, cell_ref.strain_type, flag] + feature)
+        return _rows_to_frame(rows)
 
     def label_trans(self, time):
         """
@@ -528,52 +524,26 @@ class CellNetwork():
         measure = self.measure[time]
         return dict(zip(measure.labels % DIVISION, measure.labels))
 
+    def _overtime(self, cell_id, accessor):
+        """`ImageMeasure.<accessor>(label)` of `cell_id` in every frame it is
+        tracked in, as an array."""
+        return np.array([getattr(self.measure[t], accessor)(label=self.label_map[t][cell_id])
+                         for t in self.cells[cell_id].frames])
+
     def bbox_overtime(self, cell_id):
-        bbox = []
-        frames = self.cells[cell_id].frames
-        for time in frames:
-            cell_label_t = self.label_map[time][cell_id]
-            bbox.append(self.measure[time].bbox(label=cell_label_t))
-        bbox = np.array(bbox)
-        return bbox
+        return self._overtime(cell_id, "bbox")
 
     def tips_overtime(self, cell_id):
-        tips = []
-        frames = self.cells[cell_id].frames
-        for time in frames:
-            cell_label_t = self.label_map[time][cell_id]
-            tips.append(self.measure[time].tip(label=cell_label_t))
-        tips = np.array(tips)
-        return tips
+        return self._overtime(cell_id, "tip")
 
     def coords_overtime(self, cell_id):
-        coords = []
-        frames = self.cells[cell_id].frames
-        for time in frames:
-            cell_label_t = self.label_map[time][cell_id]
-            coords.append(self.measure[time].coordinate(label=cell_label_t))
-        coords = np.array(coords)
-        # print(coords.shape)
-        return coords
+        return self._overtime(cell_id, "coordinate")
 
     def center_overtime(self, cell_id):
-        coords = []
-        frames = self.cells[cell_id].frames
-        for time in frames:
-            cell_label_t = self.label_map[time][cell_id]
-            coords.append(self.measure[time].center(label=cell_label_t))
-        coords = np.array(coords)
-        # print(coords.shape)
-        return coords
+        return self._overtime(cell_id, "center")
 
     def skeleton_overtime(self, cell_id):
-        skeletons = []
-        frames = self.cells[cell_id].frames
-        for time in frames:
-            cell_label_t = self.label_map[time][cell_id]
-            skeletons.append(self.measure[time].skeleton(label=cell_label_t))
-        skeletons = np.array(skeletons)
-        return skeletons
+        return self._overtime(cell_id, "skeleton")
 
     def oriented_tips_overtime(self, cell_id):
         """tips_overtime as a (T, 2, 2) float array whose tip order is kept
@@ -687,23 +657,19 @@ class CellNetwork():
             return 2
         cell_label = self.label_map[time][cell_id]
         start_tips = np.array(self.measure[time].tip(label=cell_label))
-        # tips = self.tips_overtime(cell_id)
-
+        end_tips = start_tips
         division_point = self.get_division_point(cell_id)
-
-        # fixed_time = np.where(self.cells[cell_id].frames == time)[0]
-        # if len(fixed_time) == 0:
-        #     return 2
-        # else:
-        #     fixed_time = fixed_time[0]
-
-        cell_label_t = self.label_map[time][cell_id]
-        end_tips = np.array(self.measure[time].tip(label=cell_label_t))
-        # print(cell_id, time, cell_label_t, cell_label)
         is_old_tip = is_mated_in_new_tip(start_tips, end_tips, division_point, meet_point)
         return is_old_tip
 
     def get_division_point(self, cell_id):
+        # fixed per cell (its start frame), so cached
+        cache = self.__dict__.setdefault("_division_point_cache", {})
+        if cell_id not in cache:
+            cache[cell_id] = self._division_point(cell_id)
+        return cache[cell_id]
+
+    def _division_point(self, cell_id):
         sister_0 = self.cells[cell_id].sister
         time = self.cells[cell_id].start
 
@@ -728,6 +694,16 @@ class CellNetwork():
 
 
 from scipy.spatial.distance import cdist
+
+
+def _rows_to_frame(rows):
+    """potential_mating_feature rows as one DataFrame (built once, not row
+    by row); empty with the same columns when there are no rows."""
+    if not rows:
+        return pd.DataFrame(None, columns=MATING_FEATURE_COLUMNS)
+    return pd.DataFrame(rows, columns=MATING_FEATURE_COLUMNS)
+
+
 def _signed_area(coords):
     """Shoelace signed area of a closed (n, 2) contour; its sign gives the
     winding direction."""
@@ -753,15 +729,7 @@ class CellNetwork90(CellNetwork):
         super().__init__(image, time_network, tracker, threshold,  *args, **kwargs)
 
     def potential_mating_feature(self, parents, time_step: int = 10):
-        columns = ['ref_id', 'ref_type', 'flag',
-                   'p_id', 'm_id',
-                   'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
-                   'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
-                   'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
-                   'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip',
-                   'time_stamp']
-        data = pd.DataFrame(None, columns=columns)
-        index = 0
+        rows = []
         for i, ref in enumerate(parents):
             cell_ref = self.cells[ref]
             start_time = cell_ref.start
@@ -774,11 +742,6 @@ class CellNetwork90(CellNetwork):
                         feature = self.pair_feature(ref, n, t)
                     else:
                         feature = self.pair_feature(n, ref, t)
-                    # feature = self.pair_feature(ref, n, t)
-                    if n == parents[1-i]:
-                        flag = True
-                    else:
-                        flag = False
-                    data.loc[index] = [ref, cell_ref.strain_type, flag]+feature
-                    index += 1
-        return data
+                    flag = n == parents[1-i]
+                    rows.append([ref, cell_ref.strain_type, flag] + feature)
+        return _rows_to_frame(rows)

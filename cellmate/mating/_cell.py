@@ -2,9 +2,7 @@ from collections.abc import Iterable
 
 import numpy as np
 
-from cellmate.configs import (CELL_IMAGE_PARAM,
-                              CellImgParamMap,
-                              GENERATION_TREE,
+from cellmate.configs import (GENERATION_TREE,
                               CellGenParamMap,)
 from cellmate.utils import hash_func, angle_of_vectors
 
@@ -42,14 +40,6 @@ class Cell(object):
     @property
     def life(self):
         return self.end - self.start + 1
-
-    @property
-    def semantic(self):
-        return np.media(self._features[:, CellImgParamMap.get(CELL_IMAGE_PARAM.SEMANTIC_LABEL)].astype(np.uint16))
-
-    @semantic.setter
-    def semantic(self, v):
-        self._features[:, CellImgParamMap.get(CELL_IMAGE_PARAM.SEMANTIC_LABEL)] = v
 
     @property
     def generation(self):
