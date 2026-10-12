@@ -34,13 +34,19 @@ NEIGHBOR_FEATURES = {
 PAIR_CELL_SHAPE_FEATURES = ["area", "skeleton_length", "medial_minor_length", "eccentricity"]
 PAIR_CELL_FEATURES = PAIR_CELL_SHAPE_FEATURES + ["neighbor_same", "neighbor_diff"]
 
-# Columns of potential_mating_feature.
+# Columns of potential_mating_feature. p_*/m_* here are pair_feature's
+# generic source_*/target_* relabeled by call order: potential_mating_feature
+# always calls pair_feature(ref, n, t) when ref is the smaller strain_type
+# and pair_feature(n, ref, t) when it's the larger, so source always lands
+# on the smaller-type cell and target on the larger-type one -- p/m is this
+# module's naming for that, not something pair_feature itself knows about.
 MATING_FEATURE_COLUMNS = [
     'ref_id', 'ref_type', 'flag', 'p_id', 'm_id',
     'p_start', 'p_area', 'p_major', 'p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
     'm_start', 'm_area', 'm_major', 'm_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
     'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
-    'center_dist', 'nearest_dist', 'tip_distance', 'p_in_new_tip', 'm_in_new_tip',
+    'center_dist', 'nearest_dist', 'orientation_diff', 'contact_length',
+    'tip_distance', 'p_in_new_tip', 'm_in_new_tip',
     'time_stamp']
 
 
@@ -361,33 +367,45 @@ class CellNetwork():
     def fusion_cells(self):
         return [node[0] for node in self.time_network.in_degree if node[1] == 2]
 
-    def pair_feature(self, p_label, m_label, time):
+    def pair_feature(self, source_id, target_id, time):
+        """Pairwise + per-cell features between two cells at one frame, in
+        call order -- this function has no notion of mating type, it just
+        reports "source" (first argument) vs "target" (second). Callers
+        that want p/m (mating-type) semantics -- see
+        `potential_mating_feature` -- get them for free here only because
+        they always call with the smaller-strain_type cell first; this
+        function itself doesn't check or enforce that.
+
+        columns = ['source_id', 'target_id',
+                   'source_start', 'source_area', 'source_major', 'source_minor', 'source_eccentricity',
+                   'source_neighbor_same', 'source_neighbor_diff',
+                   'target_start', 'target_area', 'target_major', 'target_minor', 'target_eccentricity',
+                   'target_neighbor_same', 'target_neighbor_diff',
+                   'source_angle', 'target_angle', 'source_angle_index', 'target_angle_index',
+                   'source_angle_norm', 'target_angle_norm',
+                   'center_dist', 'nearest_dist', 'orientation_diff', 'contact_length',
+                   'tip_distance', 'source_in_new_tip', 'target_in_new_tip',
+                   'time_stamp']
         """
-        columns = ['p_id', 'm_id',
-                   'p_start', 'p_area', 'p_major, p_minor', 'p_eccentricity', 'p_neighbor_same', 'p_neighbor_diff',
-                   'm_start', 'm_area', 'm_major, m_minor', 'm_eccentricity', 'm_neighbor_same', 'm_neighbor_diff',
-                   'p_angle', 'm_angle', 'p_angle_index', 'm_angle_index', 'p_angle_norm', 'm_angle_norm',
-                   'center_dist', 'nearest_dist', 'tip_distance','p_in_new_tip', 'm_in_new_tip', 'time_stamp',]
-        """
-        cell_p = self.cells[p_label]
-        cell_m = self.cells[m_label]
+        cell_source = self.cells[source_id]
+        cell_target = self.cells[target_id]
         measure = self.measure[time]
         id_label_map = self.label_map[time]
-        f_1 = self.__cell_feature(cell_p, id_label_map[cell_p.id], measure, time)
-        f_2 = self.__cell_feature(cell_m, id_label_map[cell_m.id], measure, time)
-        f_pair = self.__pair_feature(measure, id_label_map[cell_p.id], id_label_map[cell_m.id])
+        f_source = self.__cell_feature(cell_source, time)
+        f_target = self.__cell_feature(cell_target, time)
+        f_pair = self.__pair_feature(measure, id_label_map[cell_source.id], id_label_map[cell_target.id])
 
-        tips_ditance, tip_1, tip_2 = measure.tips_distance(id_label_map[cell_p.id],
-                                                           id_label_map[cell_m.id],
-                                                           ptype="label")
+        tip_distance, tip_source, tip_target = measure.tips_distance(id_label_map[cell_source.id],
+                                                                      id_label_map[cell_target.id],
+                                                                      ptype="label")
 
-        cell1_tip = self.check_meet_tips(cell_p.id, tip_1, time)
-        cell2_tip = self.check_meet_tips(cell_m.id, tip_2, time)
+        source_in_new_tip = self.check_meet_tips(cell_source.id, tip_source, time)
+        target_in_new_tip = self.check_meet_tips(cell_target.id, tip_target, time)
 
-        pair_features = [cell_p.id, cell_m.id] + f_1 + f_2 + f_pair + [tips_ditance, cell1_tip, cell2_tip] + [time]
-        return pair_features
+        return ([cell_source.id, cell_target.id] + f_source + f_target + f_pair +
+                [tip_distance, source_in_new_tip, target_in_new_tip] + [time])
 
-    def __cell_feature(self, cell, label, measure, time):
+    def __cell_feature(self, cell, time):
         shape = list(self.feature(cell.id, PAIR_CELL_SHAPE_FEATURES, frame=time))
         # neighbor_same / neighbor_diff from one neighbor lookup
         competent = self.neighbor(node=cell.id, time=time, competent_only=True)
@@ -456,11 +474,21 @@ class CellNetwork():
         return table[features] if single else table
 
     def __pair_feature(self, measure, label1, label2):
+        # orientation_diff: angle between the two cells' major axes, folded
+        # into [0, pi/2] since an axis has no direction (0 and pi are the
+        # same line) -- 0 = parallel, pi/2 = perpendicular.
+        orientation_diff = abs(measure.orientation(label=label1) - measure.orientation(label=label2))
+        orientation_diff = min(orientation_diff, np.pi - orientation_diff)
+        # contact_length: shared Voronoi border (px) at the network's own
+        # neighbor threshold -- same basis CellNetwork.neighbor itself uses,
+        # 0 if their Voronoi regions don't touch at all.
+        contact_length = measure.voronoi_contacts(self.neighbor_threshold).get(
+            (min(label1, label2), max(label1, label2)), 0)
         feature = list(measure.between_angle(label1, label2, ptype="label")) +\
                   list(measure.between_angle_index(label1, label2, ptype="label", norm=False)) +\
                   list(measure.between_angle_index(label1, label2, ptype="label", norm=True)) +\
-                  list(measure.distance(label1, label2, ptype="label")[0, 0, :2]) # +\
-                   #list(measure.tips_distance(label1, label2, ptype="label")])
+                  list(measure.distance(label1, label2, ptype="label")[0, 0, :2]) +\
+                  [orientation_diff, contact_length]
         return feature
 
     def neighbor(self, node, time, strain: str = "all", competent_only: bool = False):
@@ -488,11 +516,17 @@ class CellNetwork():
         return result
 
     def potential_mating_feature(self, parents, time_step: int = 10):
-        if self.cells[parents[0]].strain_type == self.cells[parents[1]].strain_type:
+        types = [self.cells[p].strain_type for p in parents]
+        if any(t is None for t in types):
+            unclassified = [p for p, t in zip(parents, types) if t is None]
+            raise ValueError(
+                f"cell(s) {unclassified} have no strain_type -- run create_cell_type / "
+                f"create_cell_type_by_lineage before potential_mating_feature")
+        if types[0] == types[1]:
             print("same type")
             return None
         parents = list(parents)  # reorder a copy, not the caller's list
-        if self.cells[parents[0]].strain_type > self.cells[parents[1]].strain_type:
+        if types[0] > types[1]:
             parents.reverse()
         rows = []
         for i, ref in enumerate(parents):
