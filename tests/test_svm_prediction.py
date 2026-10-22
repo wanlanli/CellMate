@@ -208,7 +208,7 @@ class CanonicalizeCandidateFeaturesTests(unittest.TestCase):
 
     def test_candidate_own_picks_the_varying_side(self):
         df = pd.DataFrame({
-            "ref_type": [1, 2],
+            "ref_type": [1, 2], "ref_id": [100, 200], "p_id": [100, 999], "m_id": [999, 200],
             "p_area": [10.0, 20.0], "m_area": [30.0, 40.0],
             "p_major": [1.0, 2.0], "m_major": [3.0, 4.0],
             "p_minor": [1.0, 2.0], "m_minor": [3.0, 4.0],
@@ -229,7 +229,7 @@ class CanonicalizeCandidateFeaturesTests(unittest.TestCase):
         # which strain is the reference isn't noise -- p/m have a known
         # tip-formation bias asymmetry -- so it must survive canonicalization.
         df = pd.DataFrame({
-            "ref_type": [1, 2, 1],
+            "ref_type": [1, 2, 1], "ref_id": [100, 200, 100], "p_id": [100, 999, 100], "m_id": [999, 200, 999],
             "p_area": [10.0, 20.0, 30.0], "m_area": [30.0, 40.0, 50.0],
             "p_major": [0.0] * 3, "m_major": [0.0] * 3, "p_minor": [0.0] * 3, "m_minor": [0.0] * 3,
             "p_eccentricity": [0.0] * 3, "m_eccentricity": [0.0] * 3,
@@ -245,7 +245,7 @@ class CanonicalizeCandidateFeaturesTests(unittest.TestCase):
 
     def test_angle_columns_relabel_both_sides_not_just_candidate(self):
         df = pd.DataFrame({
-            "ref_type": [1, 2],
+            "ref_type": [1, 2], "ref_id": [100, 200], "p_id": [100, 999], "m_id": [999, 200],
             "p_angle": [0.1, 0.2], "m_angle": [0.3, 0.4],
             "p_angle_index": [1, 2], "m_angle_index": [3, 4],
             "p_angle_norm": [0.11, 0.22], "m_angle_norm": [0.33, 0.44],
@@ -268,7 +268,8 @@ class CanonicalizeCandidateFeaturesTests(unittest.TestCase):
 
     def test_original_p_m_columns_untouched(self):
         df = pd.DataFrame({
-            "ref_type": [1], "p_area": [10.0], "m_area": [30.0],
+            "ref_type": [1], "ref_id": [100], "p_id": [100], "m_id": [999],
+            "p_area": [10.0], "m_area": [30.0],
             "p_major": [0.0], "m_major": [0.0], "p_minor": [0.0], "m_minor": [0.0],
             "p_eccentricity": [0.0], "m_eccentricity": [0.0],
             "p_neighbor_same": [0], "m_neighbor_same": [0],

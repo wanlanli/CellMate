@@ -30,6 +30,18 @@ from ._svm_prediction import (
     bootstrap_ci,
     learning_curve_by_fusion_event,
 )
+from ._rank_prediction import (
+    PAIR_GEOMETRY_COLUMNS,
+    RANK_PCT_COLUMNS,
+    CANONICAL_FEATURE_COLUMNS_V2,
+    add_rank_pct_features,
+    check_partner_counts,
+    drop_decisions_with_bad_partner_count,
+    add_total_candidates,
+    build_pairwise_dataset,
+    train_pairwise_classifier,
+    score_candidates_pairwise,
+)
 
 __all__ = [
     "CellNetwork",
@@ -69,4 +81,14 @@ __all__ = [
     "random_baseline_top_k",
     "bootstrap_ci",
     "learning_curve_by_fusion_event",
+    "PAIR_GEOMETRY_COLUMNS",
+    "RANK_PCT_COLUMNS",
+    "CANONICAL_FEATURE_COLUMNS_V2",
+    "add_rank_pct_features",
+    "check_partner_counts",
+    "drop_decisions_with_bad_partner_count",
+    "add_total_candidates",
+    "build_pairwise_dataset",
+    "train_pairwise_classifier",
+    "score_candidates_pairwise",
 ]

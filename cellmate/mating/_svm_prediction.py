@@ -121,7 +121,7 @@ _ANGLE_SIDE_PAIRS = {
 }
 
 
-def canonicalize_candidate_features(data: pd.DataFrame, ref_type_col: str = "ref_type") -> pd.DataFrame:
+def canonicalize_candidate_features(data: pd.DataFrame) -> pd.DataFrame:
     """Add a `ref_type`-agnostic view of the side-labeled columns: always
     "the candidate's own feature" (`candidate_<name>`, for `_CANDIDATE_OWN_PAIRS`)
     and "the reference's own" vs "the candidate's own" direction
@@ -136,12 +136,18 @@ def canonicalize_candidate_features(data: pd.DataFrame, ref_type_col: str = "ref
     explicit feature rather than only implicitly recoverable from which of
     `p_*`/`m_*` went into `candidate_*`/`ref_*` for a row.
 
-    Original `p_*`/`m_*` columns are kept untouched; `ref_type not in (1, 2)`
-    rows (rare -- 45/48875 on real data) fall back to treating the row as
-    if `ref_type == 2`, same as `add_partner_columns`'s `partner_id`.
+    `is_p_ref` is derived from `ref_id == p_id`, not the separately-stored
+    `ref_type` column -- confirmed on real data that `ref_id` always
+    matches exactly one of `p_id`/`m_id` (never neither, never both), so
+    this is unambiguous, whereas `ref_type` itself disagrees with which id
+    column `ref_id` actually matches for 29/48875 rows (14 decisions, 2
+    physical reference cells -- an upstream labeling bug for those two
+    fusion events specifically, confirmed consistent across every one of
+    their time snapshots, not row-level noise). Original `p_*`/`m_*`
+    columns are kept untouched.
     """
     out = data.copy()
-    is_p_ref = out[ref_type_col].eq(1)
+    is_p_ref = out["ref_id"].eq(out["p_id"])
     out["is_p_ref"] = is_p_ref.astype(int)
     for name, (p_col, m_col) in _CANDIDATE_OWN_PAIRS.items():
         out[f"candidate_{name}"] = np.where(is_p_ref, out[m_col], out[p_col])
@@ -316,13 +322,19 @@ def add_partner_columns(data: pd.DataFrame, group_cols=None) -> pd.DataFrame:
     over the event's life) -- so the random baseline and the `N >= 3`
     filter used throughout this module had been comparing the model's
     per-decision pick against the wrong, inflated denominator.
+
+    `partner_id` is derived from `ref_id == p_id` / `ref_id == m_id`, not
+    the separately-stored `ref_type` column -- see
+    `canonicalize_candidate_features`'s docstring for why (in short:
+    `ref_id` is always self-consistent with exactly one of `p_id`/`m_id`
+    on real data, `ref_type` isn't, for 29/48875 rows).
     """
     group_cols = _resolve_group_col(data, group_cols)
 
     out = data.copy()
     out["partner_id"] = np.where(
-        out["ref_type"].eq(1), out["m_id"],
-        np.where(out["ref_type"].eq(2), out["p_id"], np.nan),
+        out["ref_id"].eq(out["p_id"]), out["m_id"],
+        np.where(out["ref_id"].eq(out["m_id"]), out["p_id"], np.nan),
     )
     out["N_candidates"] = out.groupby(group_cols)["partner_id"].transform("nunique")
     return out
