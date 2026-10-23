@@ -38,9 +38,12 @@ from ._rank_prediction import (
     check_partner_counts,
     drop_decisions_with_bad_partner_count,
     add_total_candidates,
+    build_event_level_dataset,
     build_pairwise_dataset,
     train_pairwise_classifier,
     score_candidates_pairwise,
+    learning_curve_pairwise,
+    evaluate_feature_groups,
 )
 
 __all__ = [
@@ -88,7 +91,10 @@ __all__ = [
     "check_partner_counts",
     "drop_decisions_with_bad_partner_count",
     "add_total_candidates",
+    "build_event_level_dataset",
     "build_pairwise_dataset",
     "train_pairwise_classifier",
     "score_candidates_pairwise",
+    "learning_curve_pairwise",
+    "evaluate_feature_groups",
 ]
