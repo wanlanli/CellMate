@@ -66,7 +66,13 @@ def instance_fluorescent_intensity(fluorescent_image, masks, bg=None, bg_std=Non
         for f in index:
             data = [label, f]
             for ch in range(0, fluorescent_image.shape[1]):
-                ch_v = np.percentile(flatten_nonzero_value(intensity[f][ch]), measure_line)
+                values = flatten_nonzero_value(intensity[f][ch])
+                # a cell can have zero nonzero pixels in a channel on a given
+                # frame (e.g. clipped by a crop boundary) even though its mask
+                # itself is non-empty -- np.percentile errors on an empty
+                # array, so fall back to 0, the same way `background` does
+                # for an empty region.
+                ch_v = np.percentile(values, measure_line) if values.size else 0
                 data.append(ch_v)
                 if bg is not None:
                     data.append(bg[f, ch])
@@ -131,11 +137,18 @@ def _add_channel_calls(data, channel_number, z_threshold=3.0):
     type 0/1/2/3 (for 2 channels) all stay possible; the per-channel calls
     are also combined into one bitmask column, `channel_prediction_snr`
     (bit i = channel i on), and it works unchanged for a single channel.
+
+    `z_threshold`: a single float (same cutoff for every channel) or a
+    sequence of `channel_number` floats, one cutoff per channel -- useful
+    when channels differ in brightness/background noise enough that one
+    threshold doesn't suit all of them (e.g. a dim nucleus marker next to
+    two bright overall-intensity markers).
     """
     data = data.copy()
+    thresholds = np.broadcast_to(np.asarray(z_threshold, dtype=float), (channel_number,))
     channel_prediction = 0
     for i in range(0, channel_number):
-        on_i = (data[f"ch_{i}_snr"] > z_threshold).astype(int)
+        on_i = (data[f"ch_{i}_snr"] > thresholds[i]).astype(int)
         data[f"ch_{i}_prediction_snr"] = on_i
         channel_prediction = channel_prediction + on_i * 2**i
     data["channel_prediction_snr"] = channel_prediction
@@ -165,9 +178,9 @@ def compute_snr_table(fluorescent_image, masks, channel_number=2, bg_threshold=1
 def classify_snr_table(data, channel_number, z_threshold=3.0):
     """Cheap half of the SNR pipeline: turn an already-computed SNR table
     (from `compute_snr_table`, carrying `ch_i_snr` columns) into per-channel
-    on/off calls and one type per cell, for a given `z_threshold`. A groupby
-    over a small DataFrame -- fast enough to call again on every threshold
-    change.
+    on/off calls and one type per cell, for a given `z_threshold` (a single
+    float, or one per channel -- see `_add_channel_calls`). A groupby over a
+    small DataFrame -- fast enough to call again on every threshold change.
 
     Returns
     -------
@@ -191,7 +204,9 @@ def prediction_cell_type_snr(fluorescent_image, masks, channel_number=2, bg_thre
 
     `z_threshold` (background standard deviations) is the one knob to tune
     per dataset -- watch where the real clusters sit in a `ch_i_snr` scatter
-    and set it above bleed-through's SNR, below real signal's. It can't
+    and set it above bleed-through's SNR, below real signal's. Pass a
+    sequence of `channel_number` values instead of one float to tune each
+    channel separately. It can't
     tell genuine crosstalk from a real double-positive by itself (no
     per-channel-only test can) -- see `cellmate.mating._classification_legacy`
     if you need a second opinion on an unfamiliar dataset.

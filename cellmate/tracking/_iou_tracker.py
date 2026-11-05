@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 
+from ..configs import DIVISION
 from ._perfect_match import one_to_one_match, match_cells_generation_iou, wash_distance_with_golden
 from ._tracked_box import IoUTrackedBox
 from ._base_tracker import BaseTracker
@@ -82,6 +83,31 @@ class Tracker(BaseTracker):
         Add all objects from the first frame to the tracker.
         Generate resampled coordinate points and initialize the features for the first frame.
 
+        Each tracker's `.id` is taken from `label % DIVISION` (the
+        "instance_label" documented in `cellmate.configs.config` -- `label
+        == semantic_label*DIVISION + instance_label`), not a fresh
+        positional counter. For a never-before-tracked movie (fresh
+        segmentation labels, not yet DIVISION-encoded) this is harmless --
+        whatever id gets assigned here becomes authoritative once
+        `to_image`/`save_trackers` encodes it as `id + category()*DIVISION`.
+        But `cellmate.tracking.retrace` (and so `CellNetwork.from_tracked_movie`)
+        runs a *new* Tracker directly on a movie whose frame 0 is *already*
+        DIVISION-encoded from a prior tracking pass -- there, a positional
+        counter over `np.unique(image[0])` (ascending by the *full* label,
+        generation prefix included) silently scrambles relative to each
+        object's own instance id whenever frame 0 mixes generations (e.g. a
+        cropped ROI whose first frame already has cells that had divided or
+        fused earlier in the uncropped movie: numerically `1006 < 1007 <
+        2005`, but by instance id, 2005's id (5) is smaller than 1006's (6)
+        and 1007's (7)). That mismatch is exactly what every *other*
+        CellNetwork lookup (`label_map`, `neighbor`, `feature`, ...)
+        doesn't have -- they all derive a cell's id the same way, via
+        `label % DIVISION` straight off `self.image` -- so a retraced
+        CellNetwork's `Cell.parents`/`time_network` could silently disagree
+        with which cells its own spatial data says actually fused/divided.
+        Recovering the pre-existing instance id here keeps both numbering
+        schemes consistent.
+
         Returns:
         ----------
         sample_index: ndarray
@@ -91,9 +117,10 @@ class Tracker(BaseTracker):
         """
         labels = np.unique(self.image[0])[1:]
         for i in range(0, len(labels)):
-            self.count += 1
+            idx = int(labels[i] % DIVISION)
+            self.count = max(self.count, idx)
             bbox = get_bbox_from_mask(self.image[0] == labels[i])
-            trk = IoUTrackedBox(idx=self.count,
+            trk = IoUTrackedBox(idx=idx,
                                 label=labels[i],
                                 frame=0,
                                 feature=0,

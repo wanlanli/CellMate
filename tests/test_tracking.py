@@ -255,7 +255,11 @@ class RetraceVerificationTests(unittest.TestCase):
         ok, lines = run_qc(tracker, tracked_image=corrupted)
         self.assertFalse(ok)
         self.assertEqual(len(lines), 1)
-        self.assertTrue(lines[0].startswith("mistake event: ('division', 1, (2, 3))"))
+        # ids come from `label % DIVISION` (see init_first_frame), not a
+        # positional counter: the frame-0 parent's raw label is 7 (id 7,
+        # category 0), and the two daughters created afterwards get fresh
+        # ids 8 and 9 (self.count seeded from the max id already in use).
+        self.assertTrue(lines[0].startswith("mistake event: ('division', 7, (8, 9))"))
         self.assertIn("retracing the saved movie didn't", lines[0])
 
 

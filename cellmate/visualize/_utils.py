@@ -2,23 +2,36 @@ import numpy as np
 from ._colormap import COLORMAP
 
 
-def plot_cell_types(cellnet, frame=0, strain_colors=None, ax=None):
-    """Overlay each cell's predicted `strain_type` (set by
-    `CellNetwork.create_cell_type`) on one frame of `cellnet.image`, labeled
-    with its id -- for visually spot-checking the classification.
+def plot_cell_types(cellnet, frame=0, strain_colors=None, ax=None, cell_types=None):
+    """Overlay each cell's predicted type on one frame of `cellnet.image`,
+    for visually spot-checking the classification.
 
     Parameters
     ----------
     cellnet: CellNetwork
-        Must already have had `create_cell_type` called on it.
+        Must already have had `create_cell_type` (or one of its siblings)
+        called on it.
     frame: int
         Which frame of `cellnet.image` to draw.
     strain_colors: dict[int, str], optional
-        strain_type -> matplotlib color. Defaults to
+        type -> matplotlib color. Defaults to
         {0: "lightgray", 1: "tab:red", 2: "tab:blue", 3: "tab:purple"}
         (0 = unclassified, 1 = ch0 marker/h+, 2 = ch1 marker/h-, 3 = both).
     ax: matplotlib.axes.Axes, optional
         Axes to draw into; a new figure/axes is created if omitted.
+    cell_types: dict[cell_id, int], optional
+        Per-cell type to draw instead of `cellnet.cells[cell_id].strain_type`
+        -- e.g. a per-frame classification column (such as
+        `cell_type_nucleus` from `CellNetwork.create_cell_type_by_nucleus`)
+        filtered down to this `frame` and reindexed by cell id, so what you
+        see here matches the exact per-frame call a threshold-tuning scatter
+        plot is reacting to. `strain_type` itself is the *mode* of that call
+        across every frame a cell is tracked in (see `_mode_per_cell` in
+        `cellmate.mating._classification`), so it can lag behind what one
+        single frame's call just did -- pass `cell_types` when you want a
+        WYSIWYG check against that one frame instead of the cell's
+        aggregated-over-its-lifetime type. Falls back to `strain_type` for
+        any cell id not present in the dict.
 
     Returns
     -------
@@ -49,7 +62,10 @@ def plot_cell_types(cellnet, frame=0, strain_colors=None, ax=None):
         cell_id = id_by_label.get(cell_label)
         if cell_id is None or cell_id not in cellnet.cells:
             continue
-        strain_type = cellnet.cells[cell_id].strain_type
+        if cell_types is not None and cell_id in cell_types:
+            strain_type = cell_types[cell_id]
+        else:
+            strain_type = cellnet.cells[cell_id].strain_type
         if strain_type in strain_colors:
             colored_mask[mask == cell_label] = strain_colors[strain_type]
         # mask = labels == cell_label
@@ -60,7 +76,8 @@ def plot_cell_types(cellnet, frame=0, strain_colors=None, ax=None):
         # ax.text(cols.mean(), rows.mean(), f"{cell_id}\n({strain_type})",
         #         color="white", ha="center", va="center", fontsize=8)
     ax.imshow(colored_mask)
-    ax.set_title(f"frame {frame} -- predicted strain_type")
+    ax.set_title(f"frame {frame} -- predicted "
+                 f"{'per-frame type' if cell_types is not None else 'strain_type'}")
     ax.axis("off")
     return ax
 

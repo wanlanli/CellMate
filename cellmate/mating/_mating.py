@@ -30,6 +30,36 @@ NEIGHBOR_FEATURES = {
     "neighbor_diff": ("diff", True),
 }
 
+# channel_prediction_snr bitmask (bit i = channel i on, see
+# `_classification._add_channel_calls`) -> custom type label, for
+# `CellNetwork.create_cell_type_by_nucleus`'s 3-channel scheme: channel 0 and
+# channel 1 are mutually-exclusive overall-intensity markers (each brighter
+# than an untagged cell), channel 2 is a nucleus marker read out only on top
+# of channel 1.
+#
+#   ch0 on, ch1 off, ch2 off (bitmask 1)              -> type 1
+#   ch0 off, ch1 on, ch2 off (bitmask 2)               -> type 2
+#   ch0 off, ch1 on, ch2 on  (bitmask 2 + 4 = 6)       -> type 3
+#   anything else (all off, both ch0/ch1 on, ch0 + nucleus, ...) -> 0
+#
+# not in this dict (falls back to 0, "unclassified").
+NUCLEUS_TYPE_MAP = {1: 1, 2: 2, 6: 3}
+
+# Same final decision, but channel 1 (bit 1) is never looked at -- only
+# channel 0 and channel 2 (bits 0 and 2) decide the type. Pass this instead
+# of `NUCLEUS_TYPE_MAP` as `type_map` when channel 1 is the noisiest/least
+# reliable of the three and channel 0's on/off call alone is trusted to mean
+# "channel 1 would be off" (and vice versa), rather than requiring channel 1
+# to independently cross threshold for type 2/3:
+#
+#   ch0 on  (bitmask 1, 3, 5 or 7, ch1/ch2 ignored)   -> type 1
+#   ch0 off, ch2 off (bitmask 0 or 2, ch1 ignored)     -> type 2
+#   ch0 off, ch2 on  (bitmask 4 or 6, ch1 ignored)     -> type 3
+#
+# Covers all 8 possible bitmask values, so nothing falls through to 0 here
+# the way it can with `NUCLEUS_TYPE_MAP`.
+NUCLEUS_TYPE_MAP_2CH = {0: 2, 1: 1, 2: 2, 3: 1, 4: 3, 5: 1, 6: 3, 7: 1}
+
 # Per-cell columns of pair_feature (after `start`).
 PAIR_CELL_SHAPE_FEATURES = ["area", "skeleton_length", "medial_minor_length", "eccentricity"]
 PAIR_CELL_FEATURES = PAIR_CELL_SHAPE_FEATURES + ["neighbor_same", "neighbor_diff"]
@@ -149,7 +179,9 @@ class CellNetwork():
         """Classify each cell's mating type from its fluorescence, per
         channel relative to background (see `prediction_cell_type_snr`).
         `z_threshold` (background std devs to call a channel "on", default
-        3.0) is the knob to tune per dataset.
+        3.0) is the knob to tune per dataset -- pass a sequence of
+        `channel_number` values instead of one float to tune each channel
+        separately (see `_add_channel_calls`).
 
         Computing the per-(cell, frame) intensity/SNR table (one pass over
         the whole image stack, via `compute_snr_table`) is expensive;
@@ -337,6 +369,21 @@ class CellNetwork():
         for k, v in root_pred.to_dict().items():
             self.cells[k % DIVISION].strain_type = v
 
+        # a root whose own label never actually appears in `self.image` at its
+        # recorded start frame (a tracking/gap-fill inconsistency between
+        # Cell.frames and the mask array -- seen on real data, not just a
+        # theoretical case) is missing from root_pred and so never gets a
+        # strain_type here. Flag it instead of silently leaving every one of
+        # its descendants' strain_type as None too, or crashing below the
+        # first time such a descendant hits a fusion (`None | int`).
+        unmeasured_roots = [cell.id for cell in self.cells.values()
+                            if cell.ancient is None and not cell.parents
+                            and cell.strain_type is None]
+        if unmeasured_roots:
+            print(f"create_cell_type_by_lineage: root cell(s) {unmeasured_roots} have no "
+                  f"measurement (label not found in self.image at their start frame) -- "
+                  f"treating them as unclassified (0) for lineage propagation")
+
         for node in nx.topological_sort(self.time_network):
             if node not in self.cells:
                 continue
@@ -345,10 +392,263 @@ class CellNetwork():
                 cell.strain_type = self.cells[cell.ancient].strain_type
             elif cell.parents:
                 parent_1, parent_2 = cell.parents
-                cell.strain_type = self.cells[parent_1].strain_type | self.cells[parent_2].strain_type
+                type_1 = self.cells[parent_1].strain_type or 0
+                type_2 = self.cells[parent_2].strain_type or 0
+                cell.strain_type = type_1 | type_2
 
         self.fluorescent_intensity = data
         cached_params["z_threshold"] = z_threshold
+        self.classification_params = cached_params
+        self._intensity_cache_key = cached_key
+
+    def create_cell_type_by_nucleus(self, fluorescent_image=None, mask=None, bg_threshold=10,
+                                    bg_region="background", fc_threshold=50, z_threshold=3.0,
+                                    min_noise=1.0, type_map=None, force_recompute=False):
+        """Classify each cell's type from three fluorescence channels, read
+        out as a specific biological combination rather than `create_cell_type`'s
+        plain "which channels are on" bitmask: channel 0 and channel 1 are
+        two mutually exclusive overall-intensity markers (each brighter than
+        an untagged cell, tested independently against background exactly
+        like every channel in `create_cell_type` -- see `_add_channel_calls`),
+        and channel 2 is a nucleus marker, meaningful only on top of channel 1:
+
+            ch0 on,  ch1 off, ch2 off -> type 1
+            ch0 off, ch1 on,  ch2 off -> type 2
+            ch0 off, ch1 on,  ch2 on  -> type 3
+            anything else             -> 0 (unclassified)
+
+        This mapping is `NUCLEUS_TYPE_MAP` ({channel_prediction_snr bitmask:
+        type}); pass `type_map` to override it for a different dataset/
+        channel layout. channel_number is fixed at 3 -- this method is only
+        for that 3-channel scheme, not a general "channel_number=3" version
+        of `create_cell_type`. If channel 1 is the least reliable of the
+        three, pass `type_map=NUCLEUS_TYPE_MAP_2CH` instead: it makes the
+        same type 1/2/3 decision from channels 0 and 2 alone, never looking
+        at channel 1's own on/off call.
+
+        `z_threshold` can be one float (same on/off cutoff for all three
+        channels) or a sequence of 3 -- (ch0, ch1, ch2) -- to tune each
+        channel's cutoff separately, which usually matters more here than
+        for `create_cell_type`/`create_cell_type_by_lineage`: the nucleus
+        marker (channel 2) is typically dimmer or noisier relative to
+        background than the two overall-intensity markers, so one shared
+        threshold tends to under- or over-call it relative to channels 0/1.
+
+        Caches the per-(cell, frame) SNR table exactly like `create_cell_type`
+        does (same `fluorescent_image`/`mask`/`bg_threshold`/`bg_region`/
+        `fc_threshold`/`min_noise` cache key, `method="full"`, reused across
+        a `z_threshold` sweep) -- see that method's docstring for the full
+        caching/`force_recompute` behavior. Omit `fluorescent_image` to just
+        re-threshold (and/or re-map) the cached table; the last `type_map`
+        used is remembered the same way so a `z_threshold`-only call doesn't
+        need to repeat it.
+
+        The per-frame SNR table also gets a `cell_type_nucleus` column (the
+        per-(cell, frame) mapped call, before collapsing to one type per cell
+        via the mode) -- handy for plotting the classification the same way
+        `channel_prediction_snr` is used for `create_cell_type`'s SNR scatter.
+        """
+        channel_number = 3
+        cached_params = getattr(self, "classification_params", None)
+        cached_key = getattr(self, "_intensity_cache_key", None)
+
+        if type_map is None:
+            type_map = (cached_params.get("type_map", NUCLEUS_TYPE_MAP)
+                        if cached_params is not None else NUCLEUS_TYPE_MAP)
+
+        if fluorescent_image is None:
+            if force_recompute:
+                raise ValueError("force_recompute=True needs fluorescent_image to recompute from")
+            if self.fluorescent_intensity is None:
+                raise ValueError("fluorescent_image is required the first time "
+                                  "create_cell_type_by_nucleus is called; omit it on later calls "
+                                  "to just re-threshold the cached intensity table")
+            if cached_params is not None and cached_params.get("method", "full") != "full":
+                raise ValueError(
+                    "self.fluorescent_intensity was built by create_cell_type_by_lineage "
+                    "(method=%r), not a full per-(cell, frame) classifier -- it only has rows "
+                    "for root cells, not every cell/frame. Pass fluorescent_image to (re)build "
+                    "a full table here." % cached_params.get("method"))
+            recompute = False
+        else:
+            if mask is None:
+                mask = self.image
+            cache_key = (id(fluorescent_image), id(mask), channel_number, bg_threshold,
+                         bg_region, fc_threshold, min_noise)
+            recompute = force_recompute or cache_key != cached_key
+
+        if recompute:
+            self.fluorescent_intensity = compute_snr_table(
+                fluorescent_image, mask, channel_number=channel_number, bg_threshold=bg_threshold,
+                bg_region=bg_region, fc_threshold=fc_threshold, min_noise=min_noise)
+            cached_key = cache_key
+            cached_params = dict(channel_number=channel_number, bg_threshold=bg_threshold,
+                                 bg_region=bg_region, fc_threshold=fc_threshold,
+                                 min_noise=min_noise, method="full")
+
+        cell_pred, data = classify_snr_table(self.fluorescent_intensity, channel_number, z_threshold=z_threshold)
+        data["cell_type_nucleus"] = data["channel_prediction_snr"].map(lambda bitmask: type_map.get(bitmask, 0))
+        cell_pred = cell_pred.map(lambda bitmask: type_map.get(bitmask, 0))
+        for k, v in cell_pred.to_dict().items():
+            self.cells[k % DIVISION].strain_type = v
+
+        self.fluorescent_intensity = data
+        cached_params["z_threshold"] = z_threshold
+        cached_params["type_map"] = type_map
+        self.classification_params = cached_params
+        self._intensity_cache_key = cached_key
+
+    def create_cell_type_by_nucleus_lineage(self, fluorescent_image=None, mask=None, bg_threshold=10,
+                                            bg_region="background", fc_threshold=50, z_threshold=3.0,
+                                            min_noise=1.0, type_map=None, force_recompute=False):
+        """`create_cell_type_by_lineage`, for the 3-channel nucleus scheme in
+        `create_cell_type_by_nucleus`: only root cells (`cell.ancient is None
+        and not cell.parents`) are measured, each on the single frame it
+        starts in, and every other cell's type is propagated down
+        `self.time_network` exactly like `create_cell_type_by_lineage` --
+        division copies the parent's type, fusion is the bitwise OR of both
+        parents'. channel_number is fixed at 3.
+
+        The one difference: the OR-propagation runs on the raw per-channel
+        bitmask (`channel_prediction_snr`, bit i = channel i on), not on the
+        final type 1/2/3/0 label -- OR-ing two *mapped* types would collide
+        with an unrelated type (type 1 | type 2 == 3, which this scheme
+        already uses for "channel 1 + nucleus"). So a root is measured and
+        propagated as a bitmask first, the same way `create_cell_type_by_lineage`
+        propagates its own bitmask-as-strain_type, and only once every cell
+        in the lineage has its fully-propagated bitmask does `NUCLEUS_TYPE_MAP`
+        (or `type_map`) get applied, once, to read it out as the final
+        `strain_type`. Pass `type_map=NUCLEUS_TYPE_MAP_2CH` if channel 1 is
+        the least reliable channel and the final type should come from
+        channels 0/2 alone -- it covers every possible propagated bitmask
+        (0-7), so fusion/division still work the same way, just the readout
+        at the end ignores channel 1.
+
+        Same tradeoff as `create_cell_type_by_lineage`: far cheaper than
+        `create_cell_type_by_nucleus` on long movies, but silently wrong if a
+        division/fusion was missed/mis-tracked or a marker isn't stable
+        across generations -- fall back to `create_cell_type_by_nucleus` if
+        that's a risk for this dataset. Caching/`force_recompute`/omitting
+        `fluorescent_image` to just re-threshold all work exactly like
+        `create_cell_type_by_lineage` (`method="lineage"`, including its
+        "no-image call takes `frame == 0` rows of whatever table is cached"
+        fallback) -- see that method's docstring for the full behavior.
+        `type_map` is remembered across a no-`type_map` call the same way
+        `create_cell_type_by_nucleus` does.
+        """
+        channel_number = 3
+        cached_params = getattr(self, "classification_params", None)
+        cached_key = getattr(self, "_intensity_cache_key", None)
+
+        if type_map is None:
+            type_map = (cached_params.get("type_map", NUCLEUS_TYPE_MAP)
+                        if cached_params is not None else NUCLEUS_TYPE_MAP)
+
+        if fluorescent_image is None:
+            if force_recompute:
+                raise ValueError("force_recompute=True needs fluorescent_image to recompute from")
+            if self.fluorescent_intensity is None:
+                raise ValueError("fluorescent_image is required the first time "
+                                  "create_cell_type_by_nucleus_lineage is called; omit it on later "
+                                  "calls to just re-threshold the cached intensity table")
+            if cached_params is not None and cached_params.get("method") == "lineage":
+                recompute = False
+            else:
+                # Not our own root-only table (e.g. a create_cell_type_by_nucleus
+                # one, with every cell at every frame) -- take its frame-0 rows
+                # as the root measurements instead of requiring a recompute.
+                if cached_params is not None:
+                    channel_number = cached_params["channel_number"]
+                else:
+                    snr_cols = [c for c in self.fluorescent_intensity.columns
+                                if re.fullmatch(r"ch_\d+_snr", c)]
+                    channel_number = len(snr_cols)
+                self.fluorescent_intensity = (
+                    self.fluorescent_intensity[self.fluorescent_intensity["frame"] == 0].copy())
+                cached_key = None
+                cached_params = dict(channel_number=channel_number, method="lineage")
+                recompute = False
+        else:
+            if mask is None:
+                mask = self.image
+            cache_key = (id(fluorescent_image), id(mask), channel_number, bg_threshold,
+                         bg_region, fc_threshold, min_noise, "lineage")
+            recompute = force_recompute or cache_key != cached_key
+
+        if recompute:
+            root_cells = [cell for cell in self.cells.values()
+                         if cell.ancient is None and not cell.parents]
+
+            frames_needed = {}
+            for cell in root_cells:
+                frames_needed.setdefault(cell.start, []).append(cell.id)
+
+            tables = []
+            for frame in frames_needed:
+                table = compute_snr_table(
+                    fluorescent_image[frame:frame + 1], mask[frame:frame + 1],
+                    channel_number=channel_number, bg_threshold=bg_threshold, bg_region=bg_region,
+                    fc_threshold=fc_threshold, min_noise=min_noise)
+                table["frame"] = frame
+                tables.append(table)
+            self.fluorescent_intensity = (pd.concat(tables, ignore_index=True) if tables
+                                          else pd.DataFrame())
+            cached_key = cache_key
+            cached_params = dict(channel_number=channel_number, bg_threshold=bg_threshold,
+                                 bg_region=bg_region, fc_threshold=fc_threshold,
+                                 min_noise=min_noise, method="lineage")
+
+        channel_number = cached_params["channel_number"]
+        root_pred, data = classify_snr_table(self.fluorescent_intensity, channel_number, z_threshold=z_threshold)
+
+        # propagate the raw bitmask through the lineage first -- same loop as
+        # create_cell_type_by_lineage, just tracking which cells it actually
+        # touched so the type_map pass below only remaps those, not every
+        # cell in self.cells (a cell left over from an unrelated earlier
+        # classification call must not get silently reinterpreted here).
+        touched = set()
+        for k, v in root_pred.to_dict().items():
+            cid = k % DIVISION
+            self.cells[cid].strain_type = v
+            touched.add(cid)
+
+        # a root whose own label never actually appears in `self.image` at
+        # its recorded start frame (a tracking/gap-fill inconsistency
+        # between Cell.frames and the mask array -- seen on real data) is
+        # missing from root_pred and so never gets a bitmask here; flag it
+        # instead of letting the fusion branch below crash the first time
+        # one of its descendants needs `None | int`.
+        unmeasured_roots = [cell.id for cell in self.cells.values()
+                            if cell.ancient is None and not cell.parents
+                            and cell.id not in touched]
+        if unmeasured_roots:
+            print(f"create_cell_type_by_nucleus_lineage: root cell(s) {unmeasured_roots} have no "
+                  f"measurement (label not found in self.image at their start frame) -- "
+                  f"treating them as unclassified (bitmask 0) for lineage propagation")
+
+        for node in nx.topological_sort(self.time_network):
+            if node not in self.cells:
+                continue
+            cell = self.cells[node]
+            if cell.ancient is not None:
+                cell.strain_type = self.cells[cell.ancient].strain_type
+                touched.add(node)
+            elif cell.parents:
+                parent_1, parent_2 = cell.parents
+                bitmask_1 = self.cells[parent_1].strain_type or 0
+                bitmask_2 = self.cells[parent_2].strain_type or 0
+                cell.strain_type = bitmask_1 | bitmask_2
+                touched.add(node)
+
+        for cid in touched:
+            cell = self.cells[cid]
+            if cell.strain_type is not None:
+                cell.strain_type = type_map.get(cell.strain_type, 0)
+
+        data["cell_type_nucleus"] = data["channel_prediction_snr"].map(lambda bitmask: type_map.get(bitmask, 0))
+        self.fluorescent_intensity = data
+        cached_params["z_threshold"] = z_threshold
+        cached_params["type_map"] = type_map
         self.classification_params = cached_params
         self._intensity_cache_key = cached_key
 
