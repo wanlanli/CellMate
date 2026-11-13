@@ -5,7 +5,7 @@ from ._classification_legacy import FluorescentClassification, prediction_cell_t
 from ._classification2d import prediction_cell_type2d
 from ._classification90 import instance_fluorescent_intensity_h90, get_intensity_table
 from ._classification_patch import prediction_cell_type_patch
-from .feature_extract import get_mating_feature
+from .feature_extract import get_mating_feature, get_mating_feature_v2, select_view_candidates, add_group_rank_pct
 from ._svm_prediction import (
     FEATURE_COLUMNS,
     DISTANCE_ONLY_COLUMNS,
@@ -64,6 +64,9 @@ __all__ = [
     "get_intensity_table",
     "prediction_cell_type_patch",
     "get_mating_feature",
+    "get_mating_feature_v2",
+    "select_view_candidates",
+    "add_group_rank_pct",
     "FEATURE_COLUMNS",
     "DISTANCE_ONLY_COLUMNS",
     "CANDIDATE_NORMALIZE_COLUMNS",

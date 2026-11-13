@@ -79,6 +79,35 @@ MATING_FEATURE_COLUMNS = [
     'tip_distance', 'p_in_new_tip', 'm_in_new_tip',
     'time_stamp']
 
+# Columns of focal_candidate_feature / potential_mating_feature_v2 -- the
+# feature_extract.get_mating_feature_v2 pipeline. Unlike MATING_FEATURE_COLUMNS
+# (p_*/m_* by strain-order, reference vs candidate only recoverable later via
+# `ref_id`), every row here is already focal_id/candidate_id labeled, so
+# "focal_*"/"candidate_*" mean the same thing regardless of which strain is
+# the reference -- no canonicalize_candidate_features-style pass needed
+# downstream. `pixel_size` is carried along since this is also where
+# center_dist/nearest_dist/contact_length/tip_distance get converted by it
+# (potential_mating_feature's versions of these four are raw pixel
+# distances, unlike the per-cell shape features below, which
+# ImageMeasure.set_pixel_size already converts -- see focal_candidate_feature).
+FOCAL_CANDIDATE_FEATURE_COLUMNS = [
+    'focal_id', 'candidate_id',
+    'focal_start', 'focal_area', 'focal_major', 'focal_minor', 'focal_eccentricity',
+    'focal_neighbor_same', 'focal_neighbor_diff',
+    'candidate_start', 'candidate_area', 'candidate_major', 'candidate_minor', 'candidate_eccentricity',
+    'candidate_neighbor_same', 'candidate_neighbor_diff',
+    'focal_angle', 'candidate_angle', 'focal_angle_index', 'candidate_angle_index',
+    'focal_angle_norm', 'candidate_angle_norm',
+    'center_dist', 'nearest_dist', 'orientation_diff', 'contact_length',
+    'tip_distance', 'focal_in_new_tip', 'candidate_in_new_tip', 'pixel_size',
+    'time_stamp']
+
+# potential_mating_feature_v2's row columns: FOCAL_CANDIDATE_FEATURE_COLUMNS
+# plus the two columns potential_mating_feature_v2 prepends itself
+# (focal_type, flag) -- same role as MATING_FEATURE_COLUMNS's own
+# ref_type/flag prefix.
+MATING_FEATURE_COLUMNS_V2 = ['focal_type', 'flag'] + FOCAL_CANDIDATE_FEATURE_COLUMNS
+
 
 class CellNetwork():
     def __init__(self, image, time_network, tracker, threshold=None, *args, **kwargs) -> None:
@@ -705,6 +734,52 @@ class CellNetwork():
         return ([cell_source.id, cell_target.id] + f_source + f_target + f_pair +
                 [tip_distance, source_in_new_tip, target_in_new_tip] + [time])
 
+    def focal_candidate_feature(self, focal_id, candidate_id, time):
+        """`pair_feature`, but always labeled focal/candidate (focal_id is
+        whichever cell the caller is asking about; candidate_id is the one
+        being compared against it -- no p/m strain-order relabeling), and
+        with every *distance* feature -- center_dist, nearest_dist,
+        contact_length, tip_distance -- converted by this frame's
+        `pixel_size`. `pair_feature`'s own versions of those four are raw
+        pixel distances: `__pair_feature`'s underlying `measure.distance`/
+        `measure.voronoi_contacts`/`measure.tips_distance` calls don't apply
+        `pixel_size` themselves, unlike the per-cell shape features
+        (`area`/`major`/`minor`, from `__cell_feature` ->
+        `ImageMeasure.set_pixel_size`), which already come out in physical
+        units. Mixing a calibrated area with an uncalibrated distance in
+        the same feature vector is the bug this exists to fix.
+
+        columns: see FOCAL_CANDIDATE_FEATURE_COLUMNS.
+        """
+        cell_focal = self.cells[focal_id]
+        cell_candidate = self.cells[candidate_id]
+        measure = self.measure[time]
+        id_label_map = self.label_map[time]
+        f_focal = self.__cell_feature(cell_focal, time)
+        f_candidate = self.__cell_feature(cell_candidate, time)
+        f_pair = list(self.__pair_feature(measure, id_label_map[cell_focal.id], id_label_map[cell_candidate.id]))
+
+        tip_distance, tip_focal, tip_candidate = measure.tips_distance(id_label_map[cell_focal.id],
+                                                                        id_label_map[cell_candidate.id],
+                                                                        ptype="label")
+        focal_in_new_tip = self.check_meet_tips(cell_focal.id, tip_focal, time)
+        candidate_in_new_tip = self.check_meet_tips(cell_candidate.id, tip_candidate, time)
+
+        pixel_size = getattr(measure, "pixel_size", 1) or 1
+        # f_pair layout (see __pair_feature): [focal_angle, candidate_angle,
+        # focal_angle_index, candidate_angle_index, focal_angle_norm,
+        # candidate_angle_norm, center_dist, nearest_dist, orientation_diff,
+        # contact_length] -- only the two distances (6, 7) and contact_length
+        # (9) need scaling; the angle columns (0-5) and orientation_diff (8)
+        # aren't lengths.
+        f_pair[6] *= pixel_size
+        f_pair[7] *= pixel_size
+        f_pair[9] *= pixel_size
+        tip_distance = tip_distance * pixel_size
+
+        return ([cell_focal.id, cell_candidate.id] + f_focal + f_candidate + f_pair +
+                [tip_distance, focal_in_new_tip, candidate_in_new_tip, pixel_size] + [time])
+
     def __cell_feature(self, cell, time):
         shape = list(self.feature(cell.id, PAIR_CELL_SHAPE_FEATURES, frame=time))
         # neighbor_same / neighbor_diff from one neighbor lookup
@@ -844,6 +919,40 @@ class CellNetwork():
                     flag = n == parents[1-i]
                     rows.append([ref, cell_ref.strain_type, flag] + feature)
         return _rows_to_frame(rows)
+
+    def potential_mating_feature_v2(self, parents, time_step: int = 10):
+        """`potential_mating_feature`, built on `focal_candidate_feature`
+        instead of `pair_feature` -- every row is already focal_id/
+        candidate_id labeled (no p/m strain-order reorder of `parents`
+        needed: each parent is visited as the focal side once, in whatever
+        order it's given), and center_dist/nearest_dist/contact_length/
+        tip_distance are pixel_size-correct. See
+        `feature_extract.get_mating_feature_v2`, which calls this once per
+        fusion event and does the rest (keys, ranks, candidate counts).
+        """
+        types = [self.cells[p].strain_type for p in parents]
+        if any(t is None for t in types):
+            unclassified = [p for p, t in zip(parents, types) if t is None]
+            raise ValueError(
+                f"cell(s) {unclassified} have no strain_type -- run create_cell_type / "
+                f"create_cell_type_by_lineage before potential_mating_feature_v2")
+        if types[0] == types[1]:
+            print("same type")
+            return None
+        rows = []
+        for i, focal in enumerate(parents):
+            cell_focal = self.cells[focal]
+            partner = parents[1 - i]
+            start_time = cell_focal.start
+            end_time = cell_focal.end
+            time_table = list(range(start_time, end_time, time_step)) + [end_time]
+            for t in time_table:
+                mating_competent = self.neighbor(node=focal, time=t, strain="diff", competent_only=True)
+                for n in mating_competent:
+                    feature = self.focal_candidate_feature(focal, n, t)
+                    flag = n == partner
+                    rows.append([cell_focal.strain_type, flag] + feature)
+        return _rows_to_frame_v2(rows)
 
     def label_trans(self, time):
         """
@@ -1038,6 +1147,14 @@ def _rows_to_frame(rows):
     return pd.DataFrame(rows, columns=MATING_FEATURE_COLUMNS)
 
 
+def _rows_to_frame_v2(rows):
+    """potential_mating_feature_v2 rows as one DataFrame; empty with the
+    same columns when there are no rows."""
+    if not rows:
+        return pd.DataFrame(None, columns=MATING_FEATURE_COLUMNS_V2)
+    return pd.DataFrame(rows, columns=MATING_FEATURE_COLUMNS_V2)
+
+
 def _signed_area(coords):
     """Shoelace signed area of a closed (n, 2) contour; its sign gives the
     winding direction."""
@@ -1079,3 +1196,24 @@ class CellNetwork90(CellNetwork):
                     flag = n == parents[1-i]
                     rows.append([ref, cell_ref.strain_type, flag] + feature)
         return _rows_to_frame(rows)
+
+    def potential_mating_feature_v2(self, parents, time_step: int = 10):
+        """`CellNetwork90`'s `potential_mating_feature` override, rebuilt on
+        `focal_candidate_feature` -- see `CellNetwork.potential_mating_feature_v2`.
+        Like that override's non-v2 counterpart, skips the strain_type
+        check/`neighbor(strain="diff")` filter (h90 cells aren't typed
+        p/m)."""
+        rows = []
+        for i, focal in enumerate(parents):
+            cell_focal = self.cells[focal]
+            partner = parents[1 - i]
+            start_time = cell_focal.start
+            end_time = cell_focal.end
+            time_table = list(range(start_time, end_time, time_step)) + [end_time]
+            for t in time_table:
+                mating_competent = self.neighbor(node=focal, time=t)
+                for n in mating_competent:
+                    feature = self.focal_candidate_feature(focal, n, t)
+                    flag = n == partner
+                    rows.append([cell_focal.strain_type, flag] + feature)
+        return _rows_to_frame_v2(rows)
