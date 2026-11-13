@@ -89,6 +89,11 @@ Two more, built on top of the pairwise reformulation specifically:
   this one column in isolation", a multi-column group answers it for a
   logical bundle, and `{"all": CANONICAL_FEATURE_COLUMNS_V2}` as one more
   entry gives the full-feature baseline to read every other row against.
+- `evaluate_feature_removal`: the inverse question -- how much top-k
+  accuracy is *lost* when a feature/group is removed from the full
+  baseline and everything else is kept, instead of how much it carries in
+  isolation. Reports a paired-bootstrap CI on that accuracy drop per
+  group, meant for a dot-and-whisker contribution plot.
 """
 import numpy as np
 import pandas as pd
@@ -99,7 +104,7 @@ from sklearn.preprocessing import StandardScaler
 from ._svm_prediction import (
     _resolve_group_col, _resolve_fusion_event_group_col, _group_ids,
     CANDIDATE_NORMALIZE_COLUMNS, CANONICAL_FEATURE_COLUMNS,
-    top_k_accuracy, random_baseline_series,
+    top_k_hits, top_k_accuracy, random_baseline_series,
 )
 
 
@@ -573,4 +578,99 @@ def evaluate_feature_groups(train_df: pd.DataFrame, test_df: pd.DataFrame, featu
             records.append({"group": name, "n_features": len(columns), "n_train_pairs": len(pairs),
                              "class_balance": pairs["_label"].mean(), "k": k, "top_k_acc": top_k,
                              "random_top1": random_top1})
+    return pd.DataFrame.from_records(records)
+
+
+def evaluate_feature_removal(train_df: pd.DataFrame, test_df: pd.DataFrame, feature_columns,
+                              remove_groups: dict, estimator, group_col=None, label_column: str = "flag",
+                              scale: bool = True, k: int = 1, min_candidates: int = None,
+                              n_candidates_col: str = "N_candidates", random_state: int = 0,
+                              n_boot: int = 2000, boot_seed: int = 0) -> pd.DataFrame:
+    """The complement of `evaluate_feature_groups`: instead of "how much does
+    *only* this group carry", how much top-`k` accuracy is lost when this
+    group is *removed* from the full `feature_columns` baseline and
+    everything else is kept? Answers "what does this feature/group
+    actually contribute to the full model", not "is this group sufficient
+    on its own" -- the two can disagree (a feature redundant with others
+    can score near-zero costing nothing removed, while scoring well in
+    isolation if it happens to correlate with what the others already
+    capture).
+
+    `remove_groups`: `{name: [columns]}` -- each entry's columns are
+    dropped from `feature_columns` (not required to be a subset already
+    present in some other entry; entries may overlap, each is independent).
+    A 1-column list tests that single feature's own removal; a multi-column
+    list tests a logical bundle's removal together (so correlated columns
+    inside one group aren't blamed individually for signal the group only
+    carries jointly).
+
+    Fits the full-`feature_columns` baseline once, then one classifier per
+    `remove_groups` entry on `feature_columns` minus that entry's columns --
+    `clone()`d fresh each time, same training/scoring pipeline as
+    `evaluate_feature_groups` (`build_pairwise_dataset` /
+    `train_pairwise_classifier` / `score_candidates_pairwise`).
+
+    The reported `delta` (`baseline_top_k - ablated_top_k`, positive =
+    removing this group hurt accuracy) is a *paired* bootstrap CI over
+    `top_k_hits`'s per-decision 0/1 arrays, resampling decisions (not rows)
+    with replacement and re-differencing the two already-fitted models'
+    hit arrays on each resample -- paired because both models are scored
+    against the exact same test decisions, so their hits are correlated
+    (most decisions both models get right or both get wrong); an
+    unpaired/independent CI on each accuracy separately would overstate
+    the uncertainty on their difference. This is free of any retraining,
+    not a second round of model fitting.
+
+    Returns one row per `remove_groups` entry, in that dict's order:
+    `group, n_removed, n_kept, baseline_top_k, ablated_top_k, delta,
+    delta_ci_lo, delta_ci_hi, random_top_k`.
+    """
+    group_col = _resolve_group_col(train_df, group_col)
+    feature_columns = list(feature_columns)
+
+    def _fit_score_hits(columns):
+        pairs = build_pairwise_dataset(train_df, feature_columns=columns, group_col=group_col,
+                                        label_column=label_column)
+        clf = train_pairwise_classifier(pairs, feature_columns=columns, estimator=clone(estimator),
+                                         scale=scale, random_state=random_state)
+        scored = test_df.copy()
+        scored["pred_prob"] = score_candidates_pairwise(clf, scored, feature_columns=columns, group_col=group_col)
+        return top_k_hits(scored, k=k, group_col=group_col, label_col=label_column,
+                           min_candidates=min_candidates, n_candidates_col=n_candidates_col)
+
+    baseline_hits = _fit_score_hits(feature_columns)
+    random_top_k = random_baseline_series(test_df, k=k, group_col=group_col,
+                                           n_candidates_col=n_candidates_col,
+                                           min_candidates=min_candidates).mean()
+    rng = np.random.default_rng(boot_seed)
+
+    records = []
+    for name, remove_cols in remove_groups.items():
+        remove_cols = set(remove_cols)
+        kept = [c for c in feature_columns if c not in remove_cols]
+        if not kept:
+            raise ValueError(f"remove_groups[{name!r}] removes every column in feature_columns -- "
+                              "nothing left to train on")
+        ablated_hits = _fit_score_hits(kept)
+
+        common_idx = baseline_hits.index.intersection(ablated_hits.index)
+        b = baseline_hits.loc[common_idx].to_numpy(dtype=float)
+        a = ablated_hits.loc[common_idx].to_numpy(dtype=float)
+        n = len(common_idx)
+
+        resample = rng.integers(0, n, size=(n_boot, n))
+        boot_delta = b[resample].mean(axis=1) - a[resample].mean(axis=1)
+        ci_lo, ci_hi = np.percentile(boot_delta, [2.5, 97.5])
+
+        records.append({
+            "group": name,
+            "n_removed": len(feature_columns) - len(kept),
+            "n_kept": len(kept),
+            "baseline_top_k": b.mean(),
+            "ablated_top_k": a.mean(),
+            "delta": b.mean() - a.mean(),
+            "delta_ci_lo": ci_lo,
+            "delta_ci_hi": ci_hi,
+            "random_top_k": random_top_k,
+        })
     return pd.DataFrame.from_records(records)

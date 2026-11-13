@@ -566,6 +566,16 @@ def pick_one_decision_per_view(scored_df: pd.DataFrame, strategy: str = "random"
       right". Note this is also the easiest point per
       `top_k_accuracy_by_value`, so expect a higher number here than the
       other two strategies -- that's the point of comparing them.
+    - `"first"`: the decision with the *largest* `value_col` -- i.e. the
+      earliest frame of the view chronologically (`value_col` defaults to
+      `time_to_fusion`, which counts down to 0 at fusion, so "largest" is
+      "most frames still to go" = first seen), unconditionally, not just
+      within some cutoff window of fusion. The opposite extreme from
+      `"closest_to_fusion"`: candidates are freshest/least-developed here,
+      so expect the *lowest* accuracy of the three strategies, not the
+      highest -- this is the hardest, earliest-prediction case, which
+      pooling every frame together (as plain `top_k_hits`/`top_k_accuracy`
+      do) dilutes with the many easier near-fusion frames.
     - `"cutoff"`: among a view's decisions with `value_col <= cutoff`, the
       one with the *largest* `value_col` -- the first decision
       (chronologically) once the view has come within `cutoff` of fusion.
@@ -600,6 +610,8 @@ def pick_one_decision_per_view(scored_df: pd.DataFrame, strategy: str = "random"
             lambda g: g.sample(n=1, random_state=rng))
     elif strategy == "closest_to_fusion":
         selected = per_decision.loc[per_decision.groupby("_view")[value_col].idxmin()]
+    elif strategy == "first":
+        selected = per_decision.loc[per_decision.groupby("_view")[value_col].idxmax()]
     elif strategy == "cutoff":
         if cutoff is None:
             raise ValueError("strategy='cutoff' requires `cutoff`")
@@ -716,4 +728,89 @@ def learning_curve_by_fusion_event(train_df: pd.DataFrame, test_df: pd.DataFrame
                 for k in k_values:
                     acc = top_k_accuracy(scored_test, k=k, group_col=eval_group_col, min_candidates=min_candidates)
                     records.append({**base, "k": k, "top_k_acc": acc})
+    return pd.DataFrame.from_records(records)
+
+
+def evaluate_feature_removal_absolute(train_df: pd.DataFrame, test_df: pd.DataFrame, feature_columns,
+                                       remove_groups: dict, group_col=None, label_column: str = "flag",
+                                       k: int = 1, min_candidates: int = None,
+                                       n_candidates_col: str = "N_candidates", random_state: int = 0,
+                                       n_boot: int = 2000, boot_seed: int = 0, **svc_kwargs) -> pd.DataFrame:
+    """`cellmate.mating._rank_prediction.evaluate_feature_removal`'s
+    counterpart for *this* module's row-per-candidate absolute-label
+    classifier (`train_partner_classifier`/`score_candidates`), not the
+    pairwise reformulation -- how much top-`k` partner-pick accuracy is
+    lost when a feature/group is removed from `feature_columns` and
+    everything else is kept, trained the same `StandardScaler` + `SVC`
+    way as the rest of this module.
+
+    Fits the full-`feature_columns` baseline once, then one `SVC` per
+    `remove_groups` entry on `feature_columns` minus that entry's columns
+    (`remove_groups`: `{name: [columns]}`, each entry independent -- see
+    `evaluate_feature_removal`'s docstring for the single-vs-group
+    column-list convention). `svc_kwargs` are forwarded to
+    `train_partner_classifier` for every fit (baseline and every
+    ablation) -- same estimator settings throughout, only the feature set
+    changes.
+
+    Same paired-bootstrap CI as `evaluate_feature_removal`: resamples
+    `top_k_hits`'s per-decision hit arrays (decisions, not rows) with
+    replacement and re-differences the two already-fitted models' hits on
+    each resample -- paired because both models are scored on the exact
+    same test decisions, so an unpaired CI on each accuracy separately
+    would overstate the uncertainty on their difference. No retraining
+    involved in the bootstrap itself.
+
+    Returns one row per `remove_groups` entry, in that dict's order --
+    same columns as `evaluate_feature_removal`: `group, n_removed,
+    n_kept, baseline_top_k, ablated_top_k, delta, delta_ci_lo,
+    delta_ci_hi, random_top_k` -- so `cellmate.visualize.plot_feature_removal`
+    (built for the pairwise version) works on this output unchanged.
+    """
+    group_col = _resolve_group_col(train_df, group_col)
+    feature_columns = list(feature_columns)
+
+    def _fit_score_hits(columns):
+        clf = train_partner_classifier(train_df, feature_columns=columns, label_column=label_column,
+                                        random_state=random_state, **svc_kwargs)
+        scored = test_df.copy()
+        scored["pred_prob"] = score_candidates(clf, scored, feature_columns=columns)
+        return top_k_hits(scored, k=k, group_col=group_col, label_col=label_column,
+                           min_candidates=min_candidates, n_candidates_col=n_candidates_col)
+
+    baseline_hits = _fit_score_hits(feature_columns)
+    random_top_k = random_baseline_series(test_df, k=k, group_col=group_col,
+                                           n_candidates_col=n_candidates_col,
+                                           min_candidates=min_candidates).mean()
+    rng = np.random.default_rng(boot_seed)
+
+    records = []
+    for name, remove_cols in remove_groups.items():
+        remove_cols = set(remove_cols)
+        kept = [c for c in feature_columns if c not in remove_cols]
+        if not kept:
+            raise ValueError(f"remove_groups[{name!r}] removes every column in feature_columns -- "
+                              "nothing left to train on")
+        ablated_hits = _fit_score_hits(kept)
+
+        common_idx = baseline_hits.index.intersection(ablated_hits.index)
+        b = baseline_hits.loc[common_idx].to_numpy(dtype=float)
+        a = ablated_hits.loc[common_idx].to_numpy(dtype=float)
+        n = len(common_idx)
+
+        resample = rng.integers(0, n, size=(n_boot, n))
+        boot_delta = b[resample].mean(axis=1) - a[resample].mean(axis=1)
+        ci_lo, ci_hi = np.percentile(boot_delta, [2.5, 97.5])
+
+        records.append({
+            "group": name,
+            "n_removed": len(feature_columns) - len(kept),
+            "n_kept": len(kept),
+            "baseline_top_k": b.mean(),
+            "ablated_top_k": a.mean(),
+            "delta": b.mean() - a.mean(),
+            "delta_ci_lo": ci_lo,
+            "delta_ci_hi": ci_hi,
+            "random_top_k": random_top_k,
+        })
     return pd.DataFrame.from_records(records)

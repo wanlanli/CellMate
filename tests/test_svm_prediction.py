@@ -40,6 +40,7 @@ from cellmate.mating import (
     true_partner_score_trajectory,
     random_baseline_top_k,
     learning_curve_by_fusion_event,
+    evaluate_feature_removal_absolute,
 )
 from cellmate.mating._svm_prediction import NORMALIZE_COLUMNS
 
@@ -552,6 +553,12 @@ class PickOneDecisionPerViewTests(unittest.TestCase):
         picked = out.drop_duplicates("decision_id").set_index("ref_id")["time_to_fusion"]
         self.assertEqual(picked.to_dict(), {"v0": 10, "v1": 40})
 
+    def test_first_picks_largest_value(self):
+        df = _two_view_scored_table({"v0": [100, 60, 10], "v1": [80, 40]})
+        out = pick_one_decision_per_view(df, strategy="first")
+        picked = out.drop_duplicates("decision_id").set_index("ref_id")["time_to_fusion"]
+        self.assertEqual(picked.to_dict(), {"v0": 100, "v1": 80})
+
     def test_cutoff_picks_first_crossing_not_closest(self):
         # times [100, 60, 55, 10], cutoff=70 -> eligible {60, 55, 10} ->
         # should pick 60 (largest eligible = first chronological crossing),
@@ -715,6 +722,58 @@ class LearningCurveTests(unittest.TestCase):
         train_df, test_df = split_by_fusion_event(data, test_size=0.3, random_state=0)
         with self.assertRaises(ValueError):
             learning_curve_by_fusion_event(train_df, test_df, metric="bogus")
+
+
+class EvaluateFeatureRemovalAbsoluteTests(unittest.TestCase):
+    def setUp(self):
+        raw = synthetic_fusion_table(n_decisions=150, seed=2)
+        canon = canonicalize_candidate_features(raw)
+        normed = normalize_candidates(canon, columns=CANDIDATE_NORMALIZE_COLUMNS)
+        data = add_partner_columns(normed)
+        self.train_df, self.test_df = split_by_fusion_event(data, test_size=0.3, random_state=0)
+        self.distance_cols = ["center_dist", "nearest_dist", "tip_distance"]
+
+    def test_removing_a_constant_column_costs_nothing(self):
+        for df in (self.train_df, self.test_df):
+            df["constant_col"] = 1.0  # same value every row -> no signal to lose
+        out = evaluate_feature_removal_absolute(
+            self.train_df, self.test_df, feature_columns=self.distance_cols + ["constant_col"],
+            remove_groups={"constant": ["constant_col"]},
+            k=1, random_state=0, n_boot=200,
+        )
+        row = out.iloc[0]
+        self.assertAlmostEqual(row["delta"], 0.0, delta=0.1)
+        self.assertLessEqual(row["delta_ci_lo"], 0.0)
+        self.assertGreaterEqual(row["delta_ci_hi"], 0.0)
+
+    def test_removing_all_distance_columns_costs_more_than_removing_one(self):
+        for df in (self.train_df, self.test_df):
+            df["noise_col"] = np.random.default_rng(0).normal(size=len(df))
+        feature_columns = self.distance_cols + ["noise_col"]
+        out = evaluate_feature_removal_absolute(
+            self.train_df, self.test_df, feature_columns=feature_columns,
+            remove_groups={"all_distance": self.distance_cols, "center_dist_only": ["center_dist"]},
+            k=1, random_state=0, n_boot=200,
+        )
+        deltas = out.set_index("group")["delta"]
+        self.assertGreaterEqual(deltas["all_distance"], deltas["center_dist_only"])
+
+    def test_one_row_per_group_in_order(self):
+        groups = {"b": ["nearest_dist"], "a": ["center_dist"]}
+        out = evaluate_feature_removal_absolute(
+            self.train_df, self.test_df, feature_columns=self.distance_cols,
+            remove_groups=groups, k=1, random_state=0, n_boot=50,
+        )
+        self.assertEqual(list(out["group"]), ["b", "a"])
+        self.assertEqual(list(out["n_removed"]), [1, 1])
+        self.assertEqual(list(out["n_kept"]), [2, 2])
+
+    def test_removing_every_column_raises(self):
+        with self.assertRaises(ValueError):
+            evaluate_feature_removal_absolute(
+                self.train_df, self.test_df, feature_columns=self.distance_cols,
+                remove_groups={"everything": self.distance_cols}, k=1, random_state=0, n_boot=10,
+            )
 
 
 if __name__ == "__main__":

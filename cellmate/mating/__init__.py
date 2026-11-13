@@ -29,6 +29,7 @@ from ._svm_prediction import (
     random_baseline_top_k,
     bootstrap_ci,
     learning_curve_by_fusion_event,
+    evaluate_feature_removal_absolute,
 )
 from ._rank_prediction import (
     PAIR_GEOMETRY_COLUMNS,
@@ -44,6 +45,7 @@ from ._rank_prediction import (
     score_candidates_pairwise,
     learning_curve_pairwise,
     evaluate_feature_groups,
+    evaluate_feature_removal,
 )
 
 __all__ = [
@@ -84,6 +86,7 @@ __all__ = [
     "random_baseline_top_k",
     "bootstrap_ci",
     "learning_curve_by_fusion_event",
+    "evaluate_feature_removal_absolute",
     "PAIR_GEOMETRY_COLUMNS",
     "RANK_PCT_COLUMNS",
     "CANONICAL_FEATURE_COLUMNS_V2",
@@ -97,4 +100,5 @@ __all__ = [
     "score_candidates_pairwise",
     "learning_curve_pairwise",
     "evaluate_feature_groups",
+    "evaluate_feature_removal",
 ]

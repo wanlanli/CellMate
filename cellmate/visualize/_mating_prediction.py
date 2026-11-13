@@ -201,6 +201,50 @@ def plot_score_trajectories(trajectory_df, value_col="time_to_fusion", score_col
     return ax
 
 
+def plot_feature_removal(removal_df, ax=None, color="#1f77b4", sort: bool = True):
+    """Dot-and-whisker (forest) plot: `evaluate_feature_removal`'s per-group
+    accuracy drop (`delta = baseline_top_k - ablated_top_k`) with its paired
+    bootstrap 95% CI (`delta_ci_lo`/`delta_ci_hi`) as the whisker -- one row
+    per `removal_df["group"]`, a dot at `delta`, a horizontal whisker
+    spanning the CI, and a vertical reference line at 0 (no measurable
+    contribution; a CI crossing it isn't distinguishable from noise at this
+    sample size). Bars (`plot_top_k_accuracy`-style) would show each
+    group's own magnitude fine but not this signed, zero-centered "removing
+    this helped/hurt" comparison across many groups at once -- that's what
+    the dot-and-whisker form is for.
+
+    `sort=True` (default) orders rows by `delta` ascending, so with
+    matplotlib's bottom-up categorical y-axis the most load-bearing
+    feature/group ends up at the top and the least (or negative/noise-
+    level) at the bottom; pass `False` to keep `removal_df`'s own row
+    order (e.g. to match a fixed group ordering across figures).
+    """
+    created_fig = ax is None
+    if created_fig:
+        _, ax = plt.subplots(figsize=(5.5, 0.35 * len(removal_df) + 1.2))
+
+    df = removal_df.sort_values("delta", ascending=True) if sort else removal_df.iloc[::-1]
+    y = np.arange(len(df))
+    delta = df["delta"].to_numpy()
+    lo = df["delta_ci_lo"].to_numpy()
+    hi = df["delta_ci_hi"].to_numpy()
+
+    ax.hlines(y, lo, hi, color=color, linewidth=1.5)
+    ax.plot(delta, y, "o", color=color, markersize=6, zorder=3)
+    ax.axvline(0, color="black", linestyle="--", linewidth=0.8)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(df["group"])
+    ax.set_xlabel("Top-k accuracy drop when removed\n(baseline - ablated)")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    if created_fig:
+        plt.tight_layout()
+        plt.show()
+    return ax
+
+
 def plot_top_k_accuracy_by_value(by_value_df, value_col, ax=None, color="#1f77b4"):
     """Model top-k accuracy and its random baseline vs a breakout value (e.g.
     `time_stamp`), from `top_k_accuracy_by_value`'s output -- are decisions

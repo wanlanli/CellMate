@@ -40,6 +40,7 @@ from cellmate.mating._rank_prediction import (
     score_candidates_pairwise,
     learning_curve_pairwise,
     evaluate_feature_groups,
+    evaluate_feature_removal,
 )
 from tests.test_svm_prediction import synthetic_fusion_table
 
@@ -438,6 +439,50 @@ class EvaluateFeatureGroupsTests(unittest.TestCase):
         self.assertEqual(len(out), 4)
         self.assertEqual(set(out["group"]), {"distance", "center_dist_only"})
         self.assertEqual(set(out["n_features"]), {3, 1})
+
+
+class EvaluateFeatureRemovalTests(unittest.TestCase):
+    def setUp(self):
+        raw = synthetic_fusion_table(n_decisions=200, seed=6)
+        data = add_partner_columns(raw)
+        self.train_df, self.test_df = split_by_fusion_event(data, test_size=0.3, random_state=0)
+        self.all_cols = ["center_dist", "nearest_dist", "tip_distance"]
+
+    def test_removing_a_constant_column_costs_nothing(self):
+        for df in (self.train_df, self.test_df):
+            df["constant_col"] = 1.0  # same value every row -> 0 after differencing, no signal to lose
+        out = evaluate_feature_removal(
+            self.train_df, self.test_df, feature_columns=self.all_cols + ["constant_col"],
+            remove_groups={"constant": ["constant_col"]},
+            estimator=LogisticRegression(random_state=0), k=1, random_state=0, n_boot=200,
+        )
+        row = out.iloc[0]
+        self.assertAlmostEqual(row["delta"], 0.0, delta=0.05)
+        self.assertLessEqual(row["delta_ci_lo"], 0.0)
+        self.assertGreaterEqual(row["delta_ci_hi"], 0.0)
+
+    def test_removing_all_distance_columns_costs_more_than_removing_one(self):
+        for df in (self.train_df, self.test_df):
+            df["noise_col"] = np.random.default_rng(0).normal(size=len(df))
+        feature_columns = self.all_cols + ["noise_col"]
+        out = evaluate_feature_removal(
+            self.train_df, self.test_df, feature_columns=feature_columns,
+            remove_groups={"all_distance": self.all_cols, "center_dist_only": ["center_dist"]},
+            estimator=LogisticRegression(random_state=0), k=1, random_state=0, n_boot=200,
+        )
+        deltas = out.set_index("group")["delta"]
+        self.assertGreaterEqual(deltas["all_distance"], deltas["center_dist_only"])
+
+    def test_one_row_per_group_in_order(self):
+        groups = {"b": ["nearest_dist"], "a": ["center_dist"]}
+        out = evaluate_feature_removal(
+            self.train_df, self.test_df, feature_columns=self.all_cols,
+            remove_groups=groups, estimator=LogisticRegression(random_state=0),
+            k=1, random_state=0, n_boot=50,
+        )
+        self.assertEqual(list(out["group"]), ["b", "a"])
+        self.assertEqual(list(out["n_removed"]), [1, 1])
+        self.assertEqual(list(out["n_kept"]), [2, 2])
 
 
 if __name__ == "__main__":

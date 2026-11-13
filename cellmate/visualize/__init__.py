@@ -15,6 +15,7 @@ from ._mating_prediction import (
     plot_row_level_learning_curve,
     plot_top_k_accuracy_by_value,
     plot_score_trajectories,
+    plot_feature_removal,
 )
 
 
@@ -38,4 +39,5 @@ __all__ = [
     "plot_row_level_learning_curve",
     "plot_top_k_accuracy_by_value",
     "plot_score_trajectories",
+    "plot_feature_removal",
 ]
