@@ -103,10 +103,12 @@ FOCAL_CANDIDATE_FEATURE_COLUMNS = [
     'time_stamp']
 
 # potential_mating_feature_v2's row columns: FOCAL_CANDIDATE_FEATURE_COLUMNS
-# plus the two columns potential_mating_feature_v2 prepends itself
-# (focal_type, flag) -- same role as MATING_FEATURE_COLUMNS's own
-# ref_type/flag prefix.
-MATING_FEATURE_COLUMNS_V2 = ['focal_type', 'flag'] + FOCAL_CANDIDATE_FEATURE_COLUMNS
+# plus the three columns potential_mating_feature_v2 prepends itself
+# (focal_type, flag, time_source) -- time_source is 'focal_start' /
+# 'time_step' / 'candidate_start', labeling why that time_stamp was sampled
+# (see CellNetwork._time_table_with_candidate_starts), so rows can later be
+# grouped by it.
+MATING_FEATURE_COLUMNS_V2 = ['focal_type', 'flag', 'time_source'] + FOCAL_CANDIDATE_FEATURE_COLUMNS
 
 
 class CellNetwork():
@@ -890,6 +892,31 @@ class CellNetwork():
             result.append(c)
         return result
 
+    def _time_table_with_candidate_starts(self, focal, start_time, end_time, time_step, neighbor_kwargs):
+        """Sample times for `focal` in `potential_mating_feature_v2`: the
+        regular time_step grid plus each candidate's own start frame, so a
+        candidate is also sampled right when it begins rather than only at
+        the next grid step. Returns (time_table, neighbors_by_time):
+        time_table is {time: label}, label one of 'focal_start' /
+        'time_step' / 'candidate_start'; neighbors_by_time is
+        {time: self.neighbor(...)} for every time in time_table, so callers
+        don't repeat those calls.
+        """
+        time_table = {start_time: 'focal_start'}
+        for t in range(start_time + time_step, end_time, time_step):
+            time_table[t] = 'time_step'
+        time_table.setdefault(end_time, 'time_step')
+
+        neighbors_by_time = {t: self.neighbor(node=focal, time=t, **neighbor_kwargs) for t in time_table}
+
+        candidate_starts = {self.cells[n].start for ns in neighbors_by_time.values() for n in ns}
+        for t in candidate_starts:
+            if start_time <= t <= end_time and t not in time_table:
+                time_table[t] = 'candidate_start'
+                neighbors_by_time[t] = self.neighbor(node=focal, time=t, **neighbor_kwargs)
+
+        return time_table, neighbors_by_time
+
     def potential_mating_feature(self, parents, time_step: int = 10):
         types = [self.cells[p].strain_type for p in parents]
         if any(t is None for t in types):
@@ -945,13 +972,14 @@ class CellNetwork():
             partner = parents[1 - i]
             start_time = cell_focal.start
             end_time = cell_focal.end
-            time_table = list(range(start_time, end_time, time_step)) + [end_time]
-            for t in time_table:
-                mating_competent = self.neighbor(node=focal, time=t, strain="diff", competent_only=True)
-                for n in mating_competent:
+            time_table, neighbors_by_time = self._time_table_with_candidate_starts(
+                focal, start_time, end_time, time_step,
+                neighbor_kwargs=dict(strain="diff", competent_only=True))
+            for t, time_source in sorted(time_table.items()):
+                for n in neighbors_by_time[t]:
                     feature = self.focal_candidate_feature(focal, n, t)
                     flag = n == partner
-                    rows.append([cell_focal.strain_type, flag] + feature)
+                    rows.append([cell_focal.strain_type, flag, time_source] + feature)
         return _rows_to_frame_v2(rows)
 
     def label_trans(self, time):
@@ -1209,11 +1237,11 @@ class CellNetwork90(CellNetwork):
             partner = parents[1 - i]
             start_time = cell_focal.start
             end_time = cell_focal.end
-            time_table = list(range(start_time, end_time, time_step)) + [end_time]
-            for t in time_table:
-                mating_competent = self.neighbor(node=focal, time=t)
-                for n in mating_competent:
+            time_table, neighbors_by_time = self._time_table_with_candidate_starts(
+                focal, start_time, end_time, time_step, neighbor_kwargs={})
+            for t, time_source in sorted(time_table.items()):
+                for n in neighbors_by_time[t]:
                     feature = self.focal_candidate_feature(focal, n, t)
                     flag = n == partner
-                    rows.append([cell_focal.strain_type, flag] + feature)
+                    rows.append([cell_focal.strain_type, flag, time_source] + feature)
         return _rows_to_frame_v2(rows)

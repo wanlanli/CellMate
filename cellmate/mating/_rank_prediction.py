@@ -189,7 +189,9 @@ def drop_decisions_with_bad_partner_count(data: pd.DataFrame, group_col=None, la
     drops decisions with *more than one* True row (see
     `check_partner_counts`) -- both are violations of
     `get_mating_feature`'s one-true-partner-per-decision contract, not
-    just the zero case. Returns `(clean_data, n_dropped_decisions, n_dropped_rows)`.
+    just the zero case. `group_col` defaults per `_resolve_group_col` and
+    may be a single column name or a list of column names. Returns
+    `(clean_data, n_dropped_decisions, n_dropped_rows)`.
     """
     group_col = _resolve_group_col(data, group_col)
     group_ids = _group_ids(data, group_col)

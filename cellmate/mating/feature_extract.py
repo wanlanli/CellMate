@@ -19,9 +19,10 @@ import pandas as pd
 RANK_COLUMNS = {
     'nearest_dist': 'near_dist_rank',
     'center_dist': 'center_dist_rank',
-    'p_start': 'p_star_time_rank',
-    'm_start': 'm_star_time_rank',
     'tip_distance': 'tip_dist_rank',
+    'candidate_start': 'candidate_start_rank',
+    'candidate_area': 'candidate_area_rank',
+    
 }
 
 
