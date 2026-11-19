@@ -177,6 +177,17 @@ def get_mating_feature_v2(cellnet, time_step: int = 10, image=None):
     data["n_candidates_frame"] = data.groupby("decision_id")["candidate_id"].transform("nunique")
     data["n_candidates_view"] = data.groupby("view_id")["candidate_id"].transform("nunique")
 
+    # view_first_frame: every row of a view's earliest decision (the frame
+    # `select_view_candidates`/`split_by_fusion_event` would otherwise have
+    # to re-derive by grouping again). candidate_first_frame: the one row
+    # per (view_id, candidate_id) marking that candidate's own earliest
+    # appearance within the view -- same selection `select_view_candidates`
+    # (strategy="first") makes, kept as a flag instead of a filtered copy
+    # so both grains are queryable without recomputation.
+    data["view_first_frame"] = data["time_stamp"] == data.groupby("view_id")["time_stamp"].transform("min")
+    data["candidate_first_frame"] = data["time_stamp"] == data.groupby(
+        ["view_id", "candidate_id"])["time_stamp"].transform("min")
+
     ranks = data.groupby("decision_id")[list(RANK_COLUMNS_V2)].rank(ascending=True, method="min")
     data[list(RANK_COLUMNS_V2.values())] = ranks.rename(columns=RANK_COLUMNS_V2).astype("Int64")
 
@@ -194,7 +205,8 @@ def get_mating_feature_v2(cellnet, time_step: int = 10, image=None):
     pair_cols = [
         "center_dist", "nearest_dist", "orientation_diff", "contact_length",
         "tip_distance", "focal_in_new_tip", "candidate_in_new_tip", "time_diff"]
-    rest_cols = (["flag", "fusion_time", "pixel_size", "n_candidates_frame", "n_candidates_view"]
+    rest_cols = (["flag", "fusion_time", "pixel_size", "n_candidates_frame", "n_candidates_view",
+                  "view_first_frame", "candidate_first_frame"]
                  + list(RANK_COLUMNS_V2.values()))
 
     return data[key_cols + focal_cols + candidate_cols + pair_cols + rest_cols]

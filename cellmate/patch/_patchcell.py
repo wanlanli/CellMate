@@ -1,12 +1,12 @@
 import numpy as np
 
-from cellmate.mating import CellNetwork90
+from cellmate.mating import CellNetwork
 from ._utils import move_to_center, move_inward, intensity_multiple_points_fast
 from ..configs import DIVISION
 from ._classification_patch import prediction_cell_type_patch
 
 
-class CellNetworkPatch(CellNetwork90):
+class CellNetworkPatch(CellNetwork):
     def __init__(self, image, time_network, tracker, threshold, *args, **kwargs):
         super().__init__(image, time_network, tracker, threshold, *args, **kwargs)
         self._aligned_coords = {}

@@ -117,11 +117,15 @@ def _group_ids(data: pd.DataFrame, group_col) -> pd.Series:
 def split_by_fusion_event(data: pd.DataFrame, test_size: float = 0.3, random_state: int = 42, group_col=None,
                            n_candidates_col: str = "n_candidates_frame", decision_col: str = "decision_id",
                            time_col: str = "time_stamp"):
-    """Train/test split grouped by fusion event, not by decision -- see
-    `_resolve_fusion_event_group_col` for why a decision-level split leaks.
-    `group_col` overrides the default (e.g. pass the `_resolve_group_col`
-    decision-level grouping explicitly only if you specifically want that
-    and accept the leakage it implies).
+    """Train/test split grouped by fusion event, not by decision: a (fusion
+    event, focal cell) view is several time-adjacent decisions of the same
+    cell choosing among the same candidates -- near-duplicate rows that
+    would leak across train/test if split by `decision_id` instead.
+
+    `group_col` defaults to `"view_id"` (`get_mating_feature_v2`'s own
+    (fusion event, focal cell) grouping); pass `group_col="decision_id"`
+    explicitly only if you specifically want a decision-level split and
+    accept the leakage that implies.
 
     Decisions with only one candidate (`n_candidates_col == 1`) are moved
     into `train_df` no matter which side of the split their event landed
@@ -137,6 +141,8 @@ def split_by_fusion_event(data: pd.DataFrame, test_size: float = 0.3, random_sta
 
     Returns `(train_df, test_df, test_one_random_df, test_one_first_df)`.
     """
+    if group_col is None:
+        group_col = "view_id"
     event_ids = _group_ids(data, group_col)
     gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
     train_idx, test_idx = next(gss.split(data, groups=event_ids))
