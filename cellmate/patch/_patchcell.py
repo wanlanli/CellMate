@@ -27,10 +27,15 @@ class CellNetworkPatch(CellNetwork):
                 coord_t = move_to_center(coords[i], centers[i], dist=dist)
             else:
                 coord_t = move_inward(coords[i], dist=dist)
+            label = image[time, -1]
+            cell_mask = label % DIVISION == cell_id
+            # drop neighbouring cells' pixels; background pixels stay so the membrane signal is kept
+            others = (label > 0) & ~cell_mask
             data, bg = intensity_multiple_points_fast(image[time, channel],
                                                       coord_t, radius,
-                                                      (image[time, -1] % DIVISION == cell_id),
-                                                      background_percentile=50)
+                                                      cell_mask,
+                                                      background_percentile=50,
+                                                      exclude=others)
             data_overtime.append(data)
             bg_overtime.append(bg)
         data_overtime = np.array(data_overtime)

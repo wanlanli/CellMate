@@ -138,7 +138,7 @@ def disk_kernel(radius):
     return (x ** 2 + y ** 2) <= radius ** 2
 
 
-def intensity_multiple_points_fast(image, centers, radius, mask, background_percentile=50):
+def intensity_multiple_points_fast(image, centers, radius, mask, background_percentile=50, exclude=None):
     """Mean-method equivalent of `intensity_multiple_points`, but the disk
     mean is computed once for the whole neighbourhood with a disk filter and
     then read at each centre (bilinear), instead of building a full-image
@@ -149,6 +149,10 @@ def intensity_multiple_points_fast(image, centers, radius, mask, background_perc
     Disks are centred on the pixel grid, so values differ slightly from
     `intensity_multiple_points`, which centres each disk at the exact
     sub-pixel position.
+
+    `exclude` (bool array, image shape) marks pixels left out of every disk
+    mean, e.g. pixels of neighbouring cells, so a disk that reaches past the
+    membrane does not pick up their signal. A disk with no pixels left gives 0.
     """
     centers = np.asarray(centers, dtype=float)
     kernel = disk_kernel(radius)
@@ -164,13 +168,14 @@ def intensity_multiple_points_fast(image, centers, radius, mask, background_perc
     crop = (slice(lo[0], hi[0]), slice(lo[1], hi[1]))
     image_c = image[crop].astype(float)
     mask_c = mask[crop]
+    valid = np.ones_like(image_c) if exclude is None else (~exclude[crop]).astype(float)
 
-    # normalized convolution: pixels outside the image don't count, like the original
-    total = convolve(image_c, kernel.astype(float), mode="constant", cval=0.0)
-    count = convolve(np.ones_like(image_c), kernel.astype(float), mode="constant", cval=0.0)
+    # normalized convolution: pixels outside the image or excluded don't count
+    total = convolve(image_c * valid, kernel.astype(float), mode="constant", cval=0.0)
+    count = convolve(valid, kernel.astype(float), mode="constant", cval=0.0)
     # crop edges that are not image edges would also drop pixels, but the
     # margin keeps every centre more than `radius` away from them
-    mean = total / count
+    mean = np.divide(total, count, out=np.zeros_like(total), where=count > 0)
     intensities = map_coordinates(mean, (centers - lo).T, order=1, mode="nearest")
 
     erosion = binary_erosion(mask_c, structure=np.ones((radius * 2, radius * 2)), border_value=True)

@@ -16,6 +16,7 @@ from cellmate.tracking._iou_tracker import Tracker
 from cellmate.mating import CellNetwork
 from cellmate.patch import intensity_multiple_points, intensity_multiple_points_fast, move_inward
 from cellmate.patch._patchcell import common_frames
+from cellmate.patch import find_patch_peaks
 
 
 def elongated_cell_network(T=4):
@@ -76,6 +77,21 @@ class DiskFilterTests(unittest.TestCase):
         np.testing.assert_allclose(fast, exact)
         self.assertAlmostEqual(bg_fast, bg_exact)
 
+    def test_excluded_pixels_do_not_leak_into_disk(self):
+        image = np.full((60, 60), 100.0)
+        mask = np.zeros(image.shape, dtype=bool)
+        mask[10:50, 10:30] = True
+        neighbour = np.zeros(image.shape, dtype=bool)
+        neighbour[10:50, 32:50] = True
+        image[neighbour] = 1000.0
+        # centre 3 px inside the edge, disk of radius 6 reaches into the neighbour
+        centres = np.array([[30, 26]], dtype=float)
+
+        leaky, _ = intensity_multiple_points_fast(image, centres, 6, mask)
+        clean, _ = intensity_multiple_points_fast(image, centres, 6, mask, exclude=neighbour)
+        self.assertGreater(leaky[0], 100.0)
+        self.assertAlmostEqual(clean[0], 100.0)
+
 
 class MoveInwardTests(unittest.TestCase):
     def rectangle(self):
@@ -94,6 +110,54 @@ class MoveInwardTests(unittest.TestCase):
             np.testing.assert_allclose(moved[side, 0], 2)
             np.testing.assert_allclose(moved[side, 1], points[side, 1])
             self.assertTrue(((moved[:, 0] > 0) & (moved[:, 0] < 10)).all())
+
+
+def bumps(centres, heights, length=200, width=4):
+    x = np.arange(length)
+    signal = np.zeros(length)
+    for c, h in zip(centres, heights):
+        d = np.abs(x - c)
+        d = np.minimum(d, length - d)
+        signal += h * np.exp(-d ** 2 / (2 * width ** 2))
+    return signal
+
+
+class FindPatchPeaksTests(unittest.TestCase):
+    def test_weak_and_strong_patches_are_both_found(self):
+        signal = bumps([25, 95, 135], [8, 17, 94])
+        positions, intensities = find_patch_peaks(signal)
+        np.testing.assert_array_equal(positions, [25, 95, 135])
+        np.testing.assert_allclose(intensities, signal[[25, 95, 135]])
+
+    def test_peak_across_the_wrap_point(self):
+        for centre in (0, 1, 198, 199):
+            positions, _ = find_patch_peaks(bumps([centre, 100], [10, 10]))
+            np.testing.assert_array_equal(positions, sorted([centre, 100]))
+
+    def test_small_ripple_on_a_slope_is_not_a_peak(self):
+        signal = bumps([100], [100], width=10)
+        signal[115] += 6  # just above its neighbour at 114, a tiny local max on the slope
+        self.assertGreater(len(find_patch_peaks(signal, min_prominence=0)[0]), 1)
+        np.testing.assert_array_equal(find_patch_peaks(signal)[0], [100])
+
+    def test_min_height_and_flat_signal(self):
+        signal = bumps([50, 150], [5, 50])
+        np.testing.assert_array_equal(find_patch_peaks(signal, min_height=10)[0], [150])
+        self.assertEqual(len(find_patch_peaks(np.full(200, 3.0))[0]), 0)
+
+    def test_near_zero_ripple_is_noise(self):
+        signal = bumps([50, 150], [100, 10])
+        signal[100] = 0.5  # isolated bump where there is no patch
+        np.testing.assert_array_equal(find_patch_peaks(signal)[0], [50, 150])
+        np.testing.assert_array_equal(find_patch_peaks(signal, noise_floor=0)[0], [50, 100, 150])
+
+    def test_plateau_gives_one_peak(self):
+        signal = np.zeros(200)
+        signal[40:46] = 5
+        positions, intensities = find_patch_peaks(signal)
+        self.assertEqual(len(positions), 1)
+        self.assertTrue(40 <= positions[0] < 46)
+        self.assertEqual(intensities[0], 5)
 
 
 class CommonFramesTests(unittest.TestCase):
