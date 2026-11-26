@@ -11,7 +11,7 @@ class CellNetworkPatch(CellNetwork):
         super().__init__(image, time_network, tracker, threshold, *args, **kwargs)
         self._aligned_coords = {}
 
-    def raw_patch(self, cell_id, image, channel, dist=5, radius=9, move="normal"):
+    def raw_patch(self, cell_id, image, channel, dist=5, radius=9, move="normal", background_percentile=50):
         """Patch intensity at each aligned contour point, sampled `dist`
         pixels inside the membrane. `move="normal"` moves points along the
         contour's inward normal; `move="center"` moves them toward the cell
@@ -34,8 +34,9 @@ class CellNetworkPatch(CellNetwork):
             data, bg = intensity_multiple_points_fast(image[time, channel],
                                                       coord_t, radius,
                                                       cell_mask,
-                                                      background_percentile=50,
-                                                      exclude=others)
+                                                      background_percentile=background_percentile,
+                                                      exclude=others,
+                                                      erosion_margin=2 * (dist + radius))
             data_overtime.append(data)
             bg_overtime.append(bg)
         data_overtime = np.array(data_overtime)

@@ -138,7 +138,8 @@ def disk_kernel(radius):
     return (x ** 2 + y ** 2) <= radius ** 2
 
 
-def intensity_multiple_points_fast(image, centers, radius, mask, background_percentile=50, exclude=None):
+def intensity_multiple_points_fast(image, centers, radius, mask, background_percentile=50,
+                                    exclude=None, erosion_margin=None):
     """Mean-method equivalent of `intensity_multiple_points`, but the disk
     mean is computed once for the whole neighbourhood with a disk filter and
     then read at each centre (bilinear), instead of building a full-image
@@ -153,11 +154,28 @@ def intensity_multiple_points_fast(image, centers, radius, mask, background_perc
     `exclude` (bool array, image shape) marks pixels left out of every disk
     mean, e.g. pixels of neighbouring cells, so a disk that reaches past the
     membrane does not pick up their signal. A disk with no pixels left gives 0.
+
+    `erosion_margin`: how far inward from the membrane (in pixels) the
+    background-sampling region must start; None defaults to `2 * radius`.
+    The patch-intensity disks (`centers`, each `radius` pixels wide) are
+    themselves placed `dist` pixels inward by the caller, so they can reach
+    up to `dist + radius` from the membrane -- callers that know `dist`
+    should pass `erosion_margin` based on that (e.g. `2 * (dist + radius)`,
+    as `CellNetworkPatch.raw_patch` does), not just `radius`, so the
+    background sample is guaranteed clear of the pixels patch intensity was
+    itself measured from, rather than barely past the membrane. Uses a true
+    disk-shaped structuring element (matching the circular sampling kernel)
+    rather than a plain square: `np.ones((2r, 2r))` erodes asymmetrically
+    (an explicit even-sized array's default origin isn't centred -- verified
+    empirically to erode 1 pixel less on two of the four sides) and reaches
+    further diagonally (up to radius * sqrt(2)) than intended.
     """
     centers = np.asarray(centers, dtype=float)
     kernel = disk_kernel(radius)
-    # erosion structure is 2r x 2r: keep a margin that covers both it and the disk
-    margin = 2 * int(np.ceil(radius)) + 2
+    erosion_margin = 2 * radius if erosion_margin is None else erosion_margin
+    erosion_structure = disk_kernel(erosion_margin)
+    # keep a crop margin that covers both the erosion structure and the sampling disk
+    margin = int(np.ceil(erosion_margin)) + int(np.ceil(radius)) + 2
     lo = np.maximum(np.floor(centers.min(axis=0)).astype(int) - margin, 0)
     hi = np.minimum(np.ceil(centers.max(axis=0)).astype(int) + margin + 1, image.shape)
     # the mask may extend beyond the centres (centres sit inside the cell), so include it
@@ -178,7 +196,7 @@ def intensity_multiple_points_fast(image, centers, radius, mask, background_perc
     mean = np.divide(total, count, out=np.zeros_like(total), where=count > 0)
     intensities = map_coordinates(mean, (centers - lo).T, order=1, mode="nearest")
 
-    erosion = binary_erosion(mask_c, structure=np.ones((radius * 2, radius * 2)), border_value=True)
+    erosion = binary_erosion(mask_c, structure=erosion_structure, border_value=True)
     background = np.percentile(image_c[erosion], background_percentile)
     return list(intensities), background
 

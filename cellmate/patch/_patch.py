@@ -13,7 +13,7 @@
 # limitations under the License.
 import numpy as np
 import pandas as pd
-from scipy.signal import savgol_filter, find_peaks, correlate
+from scipy.signal import savgol_filter, find_peaks, peak_widths, correlate
 from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import MeanShift
 import scipy.ndimage as ndimage
@@ -21,18 +21,16 @@ from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
 
 class DynamicPatch():
-    def __init__(self, data, background, threshold=2):
+    def __init__(self, data, background):
         """
-        Initialize the DynamicPatch object with data, background, threshold, and padding length.
+        Initialize the DynamicPatch object with data and background.
 
         Parameters:
         - data: numpy array representing the signal data.
         - background: numpy array representing the background levels to be subtracted from data.
-        - threshold: float, threshold value for normalization to highlight significant signals.
         """
         self.data = data
         self.background = background
-        self.threshold = threshold
         self.patch_length = 20
         self._peaks = None
         self._properties = None
@@ -40,19 +38,65 @@ class DynamicPatch():
     @property
     def normalize(self):
         """
-        Normalize the signal data based on the background and threshold.
+        Background-subtract the signal data, clipping away everything that
+        doesn't exceed its own frame's background.
         - Subtract the background from each data point.
-        - Normalize by dividing by the median of positive values, highlighting significant signals.
-        - Subtract the threshold value to further isolate high signals.
         - Clip values below zero to ensure only positive signals are retained.
+
+        Stays in `data`'s original (raw intensity) units -- not rescaled or
+        divided by anything, so an absolute cutoff (e.g. `min_height` in
+        `detect_single_patches()`/`track_patches()`, or `low_threshold`/
+        `high_threshold` in `detect_patches_hysteresis()`) means a different
+        thing for data from a different camera/laser setting or channel, and
+        should be re-checked rather than assumed to carry over.
+
         Returns:
         - data_norm: numpy array, the normalized data with only significant values.
         """
         data_norm = (self.data - self.background[:, None])
-        # data_norm = data_norm / np.median(data_norm[data_norm > 0])
-        # data_norm = data_norm - self.threshold
         data_norm = data_norm.clip(0, None)
         return data_norm
+
+    @property
+    def noise_scale(self):
+        """
+        Robust estimate of this cell's own background-subtracted noise level,
+        in the same (raw) units as `normalize` -- meant as a per-cell
+        reference scale for an absolute detection threshold (e.g.
+        `min_height` in `detect_single_patches()`/`track_patches()`, or
+        `low_threshold`/`high_threshold` in `detect_patches_hysteresis()`),
+        since one fixed number doesn't necessarily transfer across cells or
+        imaging sessions of different absolute brightness (see `normalize`'s
+        own docstring) but a real patch's amplitude shouldn't be rescaled
+        away either (it may itself be the thing being compared, e.g. between
+        strains) -- so this gives a per-cell multiplier to scale a threshold
+        by, instead of rescaling the signal itself.
+
+        Computed as the median absolute deviation (MAD, scaled by 1.4826 to
+        be directly comparable to a standard deviation for normally
+        distributed noise) of `data - background`, *not* clipped to positive
+        the way `normalize` is -- using the unclipped, signed residual keeps
+        the estimate centred on zero. A patch occupies only a small fraction
+        of all (time, position) pixels for a cell (a handful of frames out of
+        the whole movie, a handful of positions out of the full contour), so
+        the bulk of this distribution -- and with it the median and MAD -- is
+        governed by the "off" baseline noise, barely moved by the rare real
+        patches; unlike e.g. `0.2 * self.normalize.max()`, this doesn't
+        define the threshold circularly in terms of the very peak it's
+        meant to help detect, and isn't thrown off by that one peak alone.
+
+        Returns:
+        - float, this cell's noise scale (a small constant is added so a
+          perfectly flat, noiseless background returns a tiny positive
+          number rather than exactly 0).
+
+        Example:
+        >>> patch = DynamicPatch(data, background)
+        >>> tracks_df = patch.track_patches(min_height=2 * patch.noise_scale)
+        """
+        residual = self.data - self.background[:, None]
+        mad = np.median(np.abs(residual - np.median(residual)))
+        return 1.4826 * mad + 1e-6
 
     @property
     def binarized(self):
@@ -326,7 +370,7 @@ class DynamicPatch():
         closed -- including when a patch genuinely fades out ("goes back to
         black") in the middle and a new one starts later at the same spot;
         set `min_height` (forwarded to `find_patch_peaks`, e.g.
-        `0.2 * self.normalize.max()` to scale with this cell's own signal) if
+        `2 * self.noise_scale` to scale with this cell's own noise level) if
         a dip should count as "gone" even while technically still the
         strongest point in its own frame, which `min_prominence`/`noise_floor`
         alone can't express since they're relative to each frame individually.
@@ -368,7 +412,7 @@ class DynamicPatch():
 
         Example:
         >>> patch = DynamicPatch(data, background)
-        >>> tracks_df = patch.track_patches(min_height=0.2 * patch.normalize.max())
+        >>> tracks_df = patch.track_patches(min_height=2 * patch.noise_scale)
         >>> tracks_df[["duration", "path_length", "peak_intensity"]]
         """
         data = self.normalize if data is None else np.asarray(data)
@@ -663,6 +707,364 @@ class DynamicPatch():
             space_interval=space_interval)
         return (patches_df, label_map) if return_label_map else patches_df
 
+    def detect_single_patches(self, data=None, sigma_space=1.5, min_prominence=0.15,
+                               noise_floor=0.05, min_height=None, peak_min_distance=5,
+                               max_peaks_per_frame=3, width_rel_height=0.5, min_iou=0.2,
+                               max_gap=0, min_duration=2, max_duration=None,
+                               min_width=None, max_width=None, return_label_map=False):
+        """
+        Detect single patches as local "mountains" in space that are tracked
+        across a few frames, following the definition: one patch is one
+        connected high-value region in space (roughly 15 contour points wide)
+        that stays on for a short run of frames (typically 2-5, rarely up to
+        ~30) -- as opposed to `detect_patches()`/`detect_patches_hysteresis()`,
+        which threshold the whole time x position map at once and then take
+        connected components, with no notion of "at most a handful of patches
+        active in any one frame" or "a gap means a new patch, not a
+        continuation."
+
+        The steps, in order:
+
+        1. Smooth each frame's `normalize`d profile along the circular contour
+           (`sigma_space`, Gaussian, wrapping at the position-0 seam) to reduce
+           single-point noise before peak-finding.
+        2. Find positive peaks independently in each smoothed frame
+           (`find_patch_peaks_width()`, the same relative-prominence /
+           `noise_floor` logic as `find_patch_peaks()` used by
+           `track_patches()`, plus each peak's own spatial footprint -- the
+           contiguous span around it still above `width_rel_height` of its
+           prominence). A frame usually has one peak, sometimes two, rarely
+           three; `max_peaks_per_frame` enforces that cap by keeping only the
+           tallest ones. A peak too weak to clear `min_prominence`/
+           `noise_floor`/`min_height` isn't reported at all.
+        3. Link each frame's peaks to the previous frame's open tracks by
+           footprint overlap: a peak extends a track only if its footprint's
+           IoU with that track's last footprint is at least `min_iou` (solved
+           as an assignment problem via `scipy.optimize.linear_sum_assignment`
+           when several peaks/tracks are live at once, same scheme
+           `track_wide_patches()` uses) -- i.e. peaks are "merged" into one
+           patch across frames only when their positions actually overlap,
+           not just when they're nearby.
+        4. `max_gap` (0 by default) is how many consecutive frames a track may
+           go undetected and still resume as the *same* patch. At 0, a track
+           that finds no overlapping peak in the very next frame is closed
+           immediately -- a patch that switches off and later back on at the
+           same position is always two patches, never one, which is the
+           behaviour `track_patches()`/`track_wide_patches()` only get via a
+           caller-supplied `min_height`/`max_gap`.
+        5. Each closed track is summarized into one row (spatial/temporal
+           extent + intensity features, see Returns below); pass
+           `return_label_map=True` to also get an instance-segmentation map
+           (same shape as `data`, 0 = background, else each kept patch's own
+           id) built directly from each detection's footprint.
+        6. Every tunable above is a keyword argument, so detection can be
+           re-run with different settings and compared.
+
+        Parameters:
+        - data: time x position array to detect on. Defaults to `self.normalize`.
+        - sigma_space: Gaussian smoothing sigma (contour points) applied to
+          each frame before peak-finding, wrapping across the circular seam.
+          0 disables smoothing.
+        - min_prominence, noise_floor, peak_min_distance: forwarded to
+          `find_patch_peaks_width()` for the per-frame peak detection -- see
+          its docstring. These are the only bar a single frame must clear to
+          register as part of a track.
+        - min_height: hysteresis-style "strong seed" requirement, applied once
+          per finished track rather than to every frame (None disables it):
+          a track is kept only if its own `peak_intensity` clears this
+          absolute floor (same units as `data`), even though some of its
+          frames -- typically its rise and decay -- may sit below it. This is
+          what lets a patch's weak shoulder frames link up with its strong
+          peak into one multi-frame patch instead of each shoulder frame
+          going undetected on its own and leaving only a lone, too-short
+          peak frame for `min_duration` to then discard. A fixed number here
+          doesn't necessarily transfer to a different cell/session of
+          different absolute brightness -- consider `k * self.noise_scale`
+          (e.g. `k=2`) instead of a hand-picked constant.
+        - max_peaks_per_frame: keep at most this many peaks per frame (the
+          tallest ones), matching "never more than ~3 patches active at once."
+        - width_rel_height: the fraction of each peak's own prominence used to
+          define its spatial footprint (`scipy.signal.peak_widths`'
+          `rel_height`) -- the span used both for the reported width and for
+          frame-to-frame overlap matching.
+        - min_iou: minimum intersection-over-union between a track's last
+          footprint and a candidate peak's footprint in the next frame for
+          them to count as the same patch continuing.
+        - max_gap: maximum consecutive undetected frames before a track is
+          closed rather than resumed. 0 (the default) means any gap starts a
+          new patch -- see step 4 above.
+        - min_duration: drop patches detected in fewer than this many frames.
+        - max_duration: drop patches spanning more than this many frames
+          (`time_end - time_start + 1`), e.g. to enforce "these are supposed
+          to be short-lived" when something unexpectedly long slips through.
+          None (default) applies no cap.
+        - min_width, max_width: drop patches whose widest single-frame
+          footprint falls outside this range (contour points). None (default)
+          applies no bound.
+        - return_label_map: if True, also return the instance-segmentation map.
+
+        Returns:
+        - pandas.DataFrame, one row per detected patch, with columns:
+          - patch_id: 1-based id (arbitrary, not stable across calls)
+          - time_start, time_end, duration: first/last frame and frame span
+          - n_detections: number of frames a peak was actually linked into
+            this patch (== duration unless a gap-tolerant max_gap > 0 was used)
+          - position_start, position_end: first/last detected peak position
+          - position_center, time_center: intensity-weighted centroid
+            (position_center is circular-aware)
+          - spatial_width_mean, spatial_width_max: mean / max footprint width
+            over the patch's detections
+          - peak_intensity, peak_time, peak_position: the patch's maximum
+            value and where/when it occurs
+          - mean_intensity, integrated_intensity: average / summed intensity
+            over the patch's detections
+        - numpy.ndarray (only when `return_label_map=True`, as `(df, label_map)`):
+          time x position instance-segmentation map, 0 = background.
+
+        Example:
+        >>> patch = DynamicPatch(data, background)
+        >>> patches_df = patch.detect_single_patches()
+        >>> patches_df[["duration", "spatial_width_max", "peak_intensity"]]
+        """
+        raw = self.normalize if data is None else np.asarray(data)
+        n_time, n_pos = raw.shape
+        smoothed = (gaussian_filter1d(raw, sigma=sigma_space, axis=1, mode="wrap")
+                    if sigma_space > 0 else raw)
+
+        def footprint_positions(footprint):
+            lo, hi = footprint
+            lo_i, hi_i = int(np.floor(lo)) % n_pos, int(np.ceil(hi)) % n_pos
+            return set(recurrent_index(lo_i, hi_i + 1, n_pos).tolist())
+
+        frame_peaks = []
+        for t in range(n_time):
+            # min_height is *not* forwarded here: it's applied once per
+            # finished track below (the patch's peak_intensity must clear
+            # it), not to every individual frame. A patch's early rise and
+            # late decay are often still below min_height while clearly the
+            # same event as the strong frame next to them -- requiring every
+            # frame to independently clear an absolute floor cuts exactly
+            # those shoulder frames off from their peak, leaving a lone
+            # one-frame detection that min_duration then discards (the patch
+            # never gets detected at all). Hysteresis-style instead: a frame
+            # only needs to clear the relative prominence/noise_floor bar to
+            # register as part of a track; whether the track as a whole is
+            # real is judged once, after linking, by its strongest frame.
+            positions, intensities, footprints = find_patch_peaks_width(
+                smoothed[t], min_prominence=min_prominence, noise_floor=noise_floor,
+                min_height=None, min_distance=peak_min_distance,
+                max_peaks=max_peaks_per_frame, rel_height=width_rel_height)
+            pos_sets = [footprint_positions(fp) for fp in footprints]
+            frame_peaks.append((positions, intensities, footprints, pos_sets))
+
+        active, finished = [], []
+        next_track_id = 1
+        for t in range(n_time):
+            positions, intensities, footprints, pos_sets = frame_peaks[t]
+            n_peaks, n_active = len(positions), len(active)
+            matched_tracks, matched_peaks = set(), set()
+
+            if n_active and n_peaks:
+                cost = np.ones((n_active, n_peaks))
+                for i, trk in enumerate(active):
+                    last_set = trk["position_sets"][-1]
+                    for j, pos_set in enumerate(pos_sets):
+                        union = len(last_set | pos_set)
+                        iou = len(last_set & pos_set) / union if union else 0.0
+                        cost[i, j] = 1.0 - iou
+                row_idx, col_idx = linear_sum_assignment(cost)
+                for i, j in zip(row_idx, col_idx):
+                    iou = 1.0 - cost[i, j]
+                    if iou >= min_iou:
+                        trk = active[i]
+                        trk["times"].append(t)
+                        trk["positions"].append(int(positions[j]))
+                        trk["intensities"].append(float(intensities[j]))
+                        trk["position_sets"].append(pos_sets[j])
+                        trk["last_time"] = t
+                        matched_tracks.add(i)
+                        matched_peaks.add(j)
+
+            still_active = []
+            for i, trk in enumerate(active):
+                if i in matched_tracks or (t - trk["last_time"] <= max_gap):
+                    still_active.append(trk)
+                else:
+                    finished.append(trk)
+            active = still_active
+
+            for j in range(n_peaks):
+                if j not in matched_peaks:
+                    active.append({
+                        "track_id": next_track_id,
+                        "times": [t],
+                        "positions": [int(positions[j])],
+                        "intensities": [float(intensities[j])],
+                        "position_sets": [pos_sets[j]],
+                        "last_time": t,
+                    })
+                    next_track_id += 1
+        finished.extend(active)
+
+        records = []
+        patch_id = 0
+        label_map = np.zeros((n_time, n_pos), dtype=np.int32) if return_label_map else None
+        for trk in finished:
+            if len(trk["times"]) < min_duration:
+                continue
+            times = np.array(trk["times"])
+            positions_arr = np.array(trk["positions"])
+            intensities_arr = np.array(trk["intensities"])
+            widths = np.array([len(s) for s in trk["position_sets"]])
+            duration = int(times.max() - times.min() + 1)
+
+            if max_duration is not None and duration > max_duration:
+                continue
+            if min_width is not None and widths.max() < min_width:
+                continue
+            if max_width is not None and widths.max() > max_width:
+                continue
+            if min_height is not None and intensities_arr.max() < min_height:
+                continue
+
+            patch_id += 1
+            peak_local = int(np.argmax(intensities_arr))
+            position_center = circular_center(positions_arr, intensities_arr, n_pos)
+            time_center = float(np.average(times, weights=intensities_arr))
+
+            if label_map is not None:
+                for t_i, pos_set in zip(trk["times"], trk["position_sets"]):
+                    for p in pos_set:
+                        label_map[t_i, p] = patch_id
+
+            records.append({
+                "patch_id": patch_id,
+                "time_start": int(times.min()),
+                "time_end": int(times.max()),
+                "duration": duration,
+                "n_detections": int(len(times)),
+                "position_start": int(positions_arr[0]),
+                "position_end": int(positions_arr[-1]),
+                "position_center": position_center,
+                "time_center": time_center,
+                "spatial_width_mean": float(widths.mean()),
+                "spatial_width_max": int(widths.max()),
+                "peak_intensity": float(intensities_arr[peak_local]),
+                "peak_time": int(times[peak_local]),
+                "peak_position": int(positions_arr[peak_local]),
+                "mean_intensity": float(intensities_arr.mean()),
+                "integrated_intensity": float(intensities_arr.sum()),
+            })
+
+        patches_df = pd.DataFrame.from_records(records)
+        return (patches_df, label_map) if return_label_map else patches_df
+
+    def plot_patches(self, label_map, ax=None, edgecolor="cyan", title=None, cmap="magma"):
+        """Draw `self.normalize` as a time x position heatmap with each patch
+        in `label_map` outlined as a (wrap-aware) box. `label_map` is any
+        instance-segmentation map matching `self.data`'s shape -- typically
+        from `detect_single_patches(return_label_map=True)`, but
+        `detect_patches_hysteresis(return_label_map=True)`'s works too.
+
+        Parameters:
+        - label_map: time x position int array, 0 = background, else each
+          patch's own id (see `label_map_boxes`).
+        - ax: matplotlib Axes to draw on; a new figure+axes if None.
+        - edgecolor, title, cmap: passed to the box outlines / heatmap / title.
+
+        Returns the Axes drawn on.
+
+        Example:
+        >>> patches_df, label_map = patch.detect_single_patches(return_label_map=True)
+        >>> patch.plot_patches(label_map, title=f"{len(patches_df)} patches")
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=(9, 4))
+        n_pos = self.data.shape[1]
+        ax.imshow(self.normalize.T, aspect="auto", cmap=cmap, origin="lower")
+        box_kwargs = {"fill": False, "edgecolor": edgecolor, "linewidth": 1}
+        for b in label_map_boxes(label_map, n_pos):
+            t0, dur, p0, p1 = b["time_start"], b["duration"], b["position_start"], b["position_end"]
+            if p0 <= p1:
+                ax.add_patch(plt.Rectangle((t0 - 0.5, p0 - 0.5), dur, p1 - p0 + 1, **box_kwargs))
+            else:
+                ax.add_patch(plt.Rectangle((t0 - 0.5, p0 - 0.5), dur, n_pos - p0, **box_kwargs))
+                ax.add_patch(plt.Rectangle((t0 - 0.5, -0.5), dur, p1 + 1, **box_kwargs))
+        ax.set_xlabel("Time (frame)")
+        ax.set_ylabel("Aligned contour position")
+        if title:
+            ax.set_title(title)
+        return ax
+
+    def plot_label_map(self, label_map, ax=None):
+        """Instance-segmentation view of `label_map` (0 = background, each
+        patch id its own flat color) -- useful to confirm two patches close
+        in time/space really do get different ids, and that a single
+        patch's footprint looks like one coherent blob rather than
+        fragments. Returns the Axes drawn on (a new figure+axes if None)."""
+        import matplotlib.pyplot as plt
+        from matplotlib import colors as mcolors
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=(9, 4))
+        n_ids = int(label_map.max())
+        cmap = mcolors.ListedColormap(["black"] + list(plt.cm.tab20(np.linspace(0, 1, max(n_ids, 1)))))
+        ax.imshow(label_map.T, aspect="auto", cmap=cmap, origin="lower", interpolation="nearest",
+                  vmin=-0.5, vmax=max(n_ids, 1) + 0.5)
+        ax.set_xlabel("Time (frame)")
+        ax.set_ylabel("Aligned contour position")
+        ax.set_title(f"instance label map -- {n_ids} patches")
+        return ax
+
+    def plot_frame(self, label_map, patches_df, frame, ax=None, sigma_space=1.5):
+        """Single-frame inspector: that one frame's raw vs. smoothed profile,
+        with whichever patch(es) are present at it (per `label_map`) shaded
+        by patch id -- a quick way to confirm a patch really is/isn't active
+        at a given frame, reading the actual per-pixel detection rather than
+        re-deriving it from `patches_df`'s own start/end summary.
+
+        Parameters:
+        - label_map, patches_df: as returned by
+          `detect_single_patches(return_label_map=True)`.
+        - frame: which frame (row) to inspect.
+        - ax: matplotlib Axes to draw on; a new figure+axes if None.
+        - sigma_space: smoothing sigma to overlay (should match whatever was
+          used for detection, so the overlay reflects what detection saw).
+
+        Returns the Axes drawn on.
+        """
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=(8, 3.5))
+        row_raw = self.normalize[frame]
+        row_smooth = gaussian_filter1d(row_raw, sigma=sigma_space, mode="wrap") if sigma_space > 0 else row_raw
+        frame_labels = label_map[frame]
+        active_ids = [pid for pid in np.unique(frame_labels) if pid != 0]
+
+        ax.plot(row_raw, color="0.7", label="normalize (raw)")
+        ax.plot(row_smooth, color="crimson", linewidth=1.5, label="smoothed")
+
+        cmap = plt.cm.tab20(np.linspace(0, 1, 20))
+        for pid in active_ids:
+            positions = np.where(frame_labels == pid)[0]
+            color = cmap[(pid - 1) % 20]
+            for p in positions:
+                ax.axvspan(p - 0.5, p + 0.5, color=color, alpha=0.3, linewidth=0)
+            row = patches_df[patches_df.patch_id == pid]
+            span = f" (t{int(row.time_start.iloc[0])}-{int(row.time_end.iloc[0])})" if len(row) else ""
+            ax.plot([], [], color=color, linewidth=6, alpha=0.4, label=f"patch {pid}{span}")
+
+        ax.set_xlabel("Aligned contour position")
+        ax.set_ylabel("Intensity")
+        n_active = len(active_ids)
+        status = "no patch detected" if n_active == 0 else f"{n_active} patch(es) detected"
+        ax.set_title(f"frame {frame} -- {status}")
+        ax.legend(fontsize=8, loc="upper right")
+        return ax
+
 
 def smooth(data, sigma=2):
     sig = gaussian_filter1d(data, sigma=sigma)
@@ -912,6 +1314,121 @@ def find_patch_peaks(signal, min_prominence=0.1, noise_floor=0.05, min_height=No
     peaks = peaks[keep]
     positions = np.unique(peaks[(peaks >= n) & (peaks < 2 * n)] - n)
     return positions, signal[positions]
+
+
+def find_patch_peaks_width(signal, min_prominence=0.1, noise_floor=0.05, min_height=None,
+                            min_distance=1, max_peaks=None, rel_height=0.5):
+    """
+    Like `find_patch_peaks()`, but also returns each kept peak's spatial
+    footprint -- the contiguous span around it still above `rel_height` of
+    its own prominence (`scipy.signal.peak_widths`), used by
+    `DynamicPatch.detect_single_patches()` to link peaks across frames by
+    overlap rather than by raw distance. Computed on the same signal-tiled-
+    three-times trick `find_patch_peaks()` uses, so a footprint that crosses
+    the position-0 seam comes out correct, same as the peak position itself.
+
+    Parameters: see `find_patch_peaks()`, plus:
+    - max_peaks (int or None): keep at most this many peaks (the tallest),
+      e.g. to enforce "never more than ~3 patches active in one frame."
+    - rel_height (float): fraction of each peak's own prominence used to
+      define its footprint -- 0.5 (the default) is each peak's own
+      half-prominence width, 1.0 reaches down to its prominence base.
+
+    Returns:
+    - positions (ndarray of int): peak positions, in increasing order.
+    - intensities (ndarray): signal value at each peak.
+    - footprints (list of (float, float)): each peak's (left, right) span, in
+      the same order as `positions`; right < left means the span wraps
+      through position 0.
+    """
+    signal = np.asarray(signal, dtype=float)
+    n = len(signal)
+    floor = signal.min()
+    value_range = signal.max() - floor
+    if n < 3 or value_range == 0:
+        return np.array([], dtype=int), np.array([], dtype=float), []
+
+    tiled = np.concatenate([signal, signal, signal])
+    peaks, props = find_peaks(tiled, prominence=0, distance=max(1, int(min_distance)))
+    height = tiled[peaks] - floor
+    keep = (props["prominences"] >= min_prominence * height) & (height >= noise_floor * value_range)
+    if min_height is not None:
+        keep &= tiled[peaks] >= min_height
+
+    peaks = peaks[keep]
+    prominences = props["prominences"][keep]
+    left_bases = props["left_bases"][keep]
+    right_bases = props["right_bases"][keep]
+
+    # Only peaks whose position falls in the middle copy are kept (to avoid
+    # triple-counting), but widths are computed on the tiled signal (correct
+    # across the wrap) before mapping back to real coordinates.
+    middle = (peaks >= n) & (peaks < 2 * n)
+    peaks, prominences = peaks[middle], prominences[middle]
+    left_bases, right_bases = left_bases[middle], right_bases[middle]
+
+    if len(peaks) == 0:
+        return np.array([], dtype=int), np.array([], dtype=float), []
+
+    if max_peaks is not None and len(peaks) > max_peaks:
+        keep_idx = np.argsort(tiled[peaks])[::-1][:max_peaks]
+        peaks, prominences = peaks[keep_idx], prominences[keep_idx]
+        left_bases, right_bases = left_bases[keep_idx], right_bases[keep_idx]
+
+    order = np.argsort(peaks)
+    peaks, prominences = peaks[order], prominences[order]
+    left_bases, right_bases = left_bases[order], right_bases[order]
+
+    widths, width_heights, left_ips, right_ips = peak_widths(
+        tiled, peaks, rel_height=rel_height,
+        prominence_data=(prominences, left_bases, right_bases))
+
+    positions = (peaks - n) % n
+    intensities = tiled[peaks]
+    footprints = [(float((lo - n) % n), float((hi - n) % n)) for lo, hi in zip(left_ips, right_ips)]
+    return positions, intensities, footprints
+
+
+def circular_bbox(positions, n_pos):
+    """
+    Smallest circular bounding span covering the given position indices.
+    Returns (start, end, width) in real coordinates; start > end means the
+    span wraps through position 0.
+    """
+    positions = np.unique(positions)
+    if len(positions) == n_pos:
+        return 0, n_pos - 1, n_pos
+    present = np.zeros(n_pos, dtype=bool)
+    present[positions] = True
+    roll_index = int(np.where(~present)[0][0])
+    rolled = np.sort((positions - roll_index) % n_pos)
+    start = int((rolled[0] + roll_index) % n_pos)
+    end = int((rolled[-1] + roll_index) % n_pos)
+    width = int(rolled[-1] - rolled[0] + 1)
+    return start, end, width
+
+
+def label_map_boxes(label_map, n_pos):
+    """
+    One box per id in an instance-segmentation `label_map` (0 = background),
+    from each id's own pixels -- not a summary DataFrame's single start/end
+    position, which can understate the footprint if the patch drifts. Works
+    for any method's label map (`detect_single_patches`'s or
+    `detect_patches_hysteresis`'s). Used by `DynamicPatch.plot_patches`.
+
+    Returns a list of dict, each {"time_start", "duration", "position_start",
+    "position_end"} (`draw_patch_boxes`-style; `position_start > position_end`
+    means that patch wraps through position 0).
+    """
+    boxes = []
+    for pid in np.unique(label_map):
+        if pid == 0:
+            continue
+        t_idx, pos_idx = np.where(label_map == pid)
+        p0, p1, _ = circular_bbox(pos_idx, n_pos)
+        boxes.append({"time_start": int(t_idx.min()), "duration": int(t_idx.max() - t_idx.min() + 1),
+                       "position_start": p0, "position_end": p1})
+    return boxes
 
 
 def circular_width(positions, n_space):

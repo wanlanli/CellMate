@@ -1059,7 +1059,24 @@ class CellNetwork():
         endpoints: those jump by several pixels frame to frame (skeleton
         spurs), which makes the alignment jitter. Contours are put in one
         winding direction first, so "half 1" is the same side of the cell in
-        every frame."""
+        every frame.
+
+        Each frame's split point is the contour point minimizing distance to
+        `center_tip` *plus* distance to the previous frame's own resolved
+        split point (the latter is `center_tip` itself on the first frame,
+        so behaves exactly as plain nearest-point there). `center_tip` alone
+        can be nearly tied between two candidates several contour points
+        apart (most often right where the contour wraps a pointed tip), and
+        a sub-pixel wobble in which one is literally closest then flips the
+        plain `argmin` between them even though the real tip barely moved --
+        a one-frame jump in what point index N means physically, which can
+        make a real multi-frame patch spuriously look like it moved or
+        split. The previous-point term breaks that tie in favor of
+        continuing smoothly from the previous frame instead, the same
+        principle `oriented_tips_overtime` already applies to the raw
+        2-tip order; `center_tip` stays in the sum too so a real multi-frame
+        drift still accumulates correctly instead of the index locking onto
+        one spot."""
         from cellmate.configs import CONTOURS_LENGTH
         from cellmate.patch._utils import circular_sequence, resample_curve
 
@@ -1068,16 +1085,20 @@ class CellNetwork():
         center_tip_1, center_tip_2 = self.center_tips(cell_id)
         coords = self.coords_overtime(cell_id)
         new_coords = []
+        prev_point_1, prev_point_2 = center_tip_1, center_tip_2
         for i in range(len(self.cells[cell_id].frames)):
             coord_t = np.asarray(coords[i], dtype=float)
             if _signed_area(coord_t) > 0:
                 coord_t = coord_t[::-1]
             max_id = len(coord_t)
-            tip_1_index = np.argmin(np.linalg.norm(coord_t - center_tip_1, axis=1))
-            tip_2_index = np.argmin(np.linalg.norm(coord_t - center_tip_2, axis=1))
+            cost_1 = np.linalg.norm(coord_t - center_tip_1, axis=1) + np.linalg.norm(coord_t - prev_point_1, axis=1)
+            cost_2 = np.linalg.norm(coord_t - center_tip_2, axis=1) + np.linalg.norm(coord_t - prev_point_2, axis=1)
+            tip_1_index = np.argmin(cost_1)
+            tip_2_index = np.argmin(cost_2)
             if tip_1_index == tip_2_index:
                 # degenerate (round cell / bad skeleton): split at the opposite point
                 tip_2_index = (tip_1_index + max_id // 2) % max_id
+            prev_point_1, prev_point_2 = coord_t[tip_1_index], coord_t[tip_2_index]
             split_1 = circular_sequence(tip_1_index, tip_2_index, max_id)
             split_2 = circular_sequence(tip_2_index, tip_1_index, max_id)
             new_split1 = resample_curve(coord_t[split_1], half)
